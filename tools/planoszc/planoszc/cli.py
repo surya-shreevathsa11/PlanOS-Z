@@ -12,10 +12,12 @@ from . import errors as E
 from .admission import Admission, Policy, PlanLoadError, admit, load_plan
 from .backend_fake import FakeBackend, FaultInjection
 from .codegen import gen_header, gen_source
-from .compile import CompileError, compile_plan, ir_to_c_header
+from .compile import FORGE_MODES, CompileError, compile_plan, forge_ir, ir_to_c_header
 from .executor import run as run_plan
 from .idl import IdlError, Registry, find_repo_root, load_registry
+from .replay import ReplayError, parse_lines, replay
 from .trace import Trace, dumps
+from .wire import WireError, encode as wire_encode, shell_lines
 
 
 # ------------------------------------------------------------------ formatting
@@ -86,6 +88,7 @@ def _policy(args: argparse.Namespace) -> Policy:
         granted_permissions=set(grant.split(",")) if grant else None,
         allow_hazardous=getattr(args, "allow_hazardous", False),
         sequential_executor=getattr(args, "executor", "parallel") == "sequential",
+        workers=getattr(args, "workers", None),
     )
 
 
@@ -97,7 +100,8 @@ def _load_and_admit(args: argparse.Namespace, policy: Policy | None = None):
 
 # ------------------------------------------------------------------ commands
 def cmd_check(args: argparse.Namespace) -> int:
-    _, _, adm = _load_and_admit(args, Policy(sequential_executor=args.executor == "sequential"))
+    _, _, adm = _load_and_admit(args, Policy(sequential_executor=args.executor == "sequential",
+                                             workers=args.workers))
     if args.format == "json":
         ev = adm.to_event()
         if adm.accepted:
@@ -153,7 +157,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(format_admission(adm))
             print("TRACE")
         before = len(trace.events)
-        result = run_plan(adm, FakeBackend(sensors, faults), trace)
+        result = run_plan(adm, FakeBackend(sensors, faults), trace,
+                          max_workers=_policy(args).effective_workers)
         if not ndjson:
             for ev in trace.events[before:]:
                 print("  " + format_event(ev))
@@ -176,15 +181,62 @@ def cmd_compile(args: argparse.Namespace) -> int:
         return E.EXIT_REJECTED
     try:
         ir = compile_plan(adm, reg)
-    except CompileError as exc:
+        if args.forge:
+            ir = forge_ir(ir, args.forge.split(","))
+        if args.emit == "uart":
+            text = "\n".join(shell_lines(wire_encode(ir))) + "\n"
+        elif args.emit == "c":
+            text = ir_to_c_header(ir, args.symbol)
+        else:
+            text = json.dumps(ir, indent=2) + "\n"
+    except (CompileError, WireError) as exc:
         print(f"planoszc: {exc}", file=sys.stderr)
         return E.EXIT_USAGE
-    text = ir_to_c_header(ir, args.symbol) if args.emit == "c" else json.dumps(ir, indent=2) + "\n"
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8")
     else:
         sys.stdout.write(text)
     return E.EXIT_OK
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    reg = None
+    plans: dict[str, dict] = {}
+    if args.plan:
+        reg = _registry(args)
+        for path in args.plan:
+            doc = load_plan(path)
+            plans[str(doc.get("plan_id"))] = doc
+    overlap: dict[str, int] = {}
+    for item in args.require_overlap or []:
+        name, _, n = item.partition("=")
+        if not n.isdigit():
+            print(f"planoszc: --require-overlap wants PLAN_ID=N, got '{item}'", file=sys.stderr)
+            return E.EXIT_USAGE
+        overlap[name] = int(n)
+    try:
+        src = sys.stdin if args.trace == "-" else open(args.trace, encoding="utf-8")
+        with src:
+            events = parse_lines(src, extract=args.extract)
+    except OSError as exc:
+        print(f"planoszc: cannot read trace {args.trace}: {exc}", file=sys.stderr)
+        return E.EXIT_USAGE
+    except ReplayError as exc:
+        print(f"planoszc: replay: {exc}", file=sys.stderr)
+        return E.EXIT_REPLAY_FAILED
+    if not events:
+        print("planoszc: replay: no trace events found", file=sys.stderr)
+        return E.EXIT_REPLAY_FAILED
+    reports = replay(events, plans, reg, tolerance_ms=args.tolerance_ms, require_overlap=overlap)
+    bad = 0
+    for rep in reports:
+        print(rep.summary())
+        for v in rep.violations:
+            print(f"       {v}")
+            bad += 1
+    runs = sum(1 for r in reports if r.kind == "run")
+    print(f"replay: {len(reports)} record(s) ({runs} run(s)), {bad} violation(s)")
+    return E.EXIT_OK if bad == 0 else E.EXIT_REPLAY_FAILED
 
 
 def cmd_skills(args: argparse.Namespace) -> int:
@@ -236,12 +288,16 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--grant", help="comma list of permissions the device grants (default: all)")
         sp.add_argument("--allow-hazardous", action="store_true", help="device policy: allow HAZARDOUS skills")
         sp.add_argument("--executor", choices=["parallel", "sequential"], default="parallel",
-                        help="timing model: parallel = critical path (host executor); "
-                             "sequential = sum of WCETs (device executor v0.1)")
+                        help="timing model: parallel = critical path (unbounded workers); "
+                             "sequential = sum of WCETs (= --workers 1)")
+        sp.add_argument("--workers", type=int, metavar="N",
+                        help="bound the executor to N workers (the device default is 2): critical path "
+                             "if the plan never needs more than N at once, else the list-scheduling bound")
 
     sp = sub.add_parser("check", help="static analysis: contracts, deps, resources, WCET (no policy)")
     sp.add_argument("plan")
     sp.add_argument("--executor", choices=["parallel", "sequential"], default="parallel")
+    sp.add_argument("--workers", type=int, metavar="N")
     sp.add_argument("--format", choices=["human", "json"], default="human")
     sp.set_defaults(fn=cmd_check)
 
@@ -261,9 +317,14 @@ def build_parser() -> argparse.ArgumentParser:
     add_policy(sp)
     sp.set_defaults(fn=cmd_run)
 
-    sp = sub.add_parser("compile", help="emit IR (json or C header) for an admitted plan")
+    sp = sub.add_parser("compile", help="emit IR for an admitted plan: json, a C header, or the "
+                                        "`planosz load ...` shell payload for UART upload")
     sp.add_argument("plan")
-    sp.add_argument("--emit", choices=["json", "c"], default="json")
+    sp.add_argument("--emit", "--format", dest="emit", choices=["json", "c", "uart"], default="json",
+                    help="uart = paste payload for the device shell (begin / data* / end)")
+    sp.add_argument("--forge", metavar="MODES",
+                    help=f"test tool: falsify host claims in the IR ({','.join(FORGE_MODES)}) to prove "
+                         f"the device re-derives WCET/resources")
     sp.add_argument("-o", "--output")
     sp.add_argument("--symbol", default="PLAN", help="C symbol prefix for --emit c")
     sp.add_argument("--force", action="store_true",
@@ -271,6 +332,19 @@ def build_parser() -> argparse.ArgumentParser:
                          "used to prove the device re-rejects it")
     add_policy(sp)
     sp.set_defaults(fn=cmd_compile)
+
+    sp = sub.add_parser("replay", help="validate an NDJSON trace (host run or device console log): "
+                                       "causality, resources, WCET, deadline, concurrency")
+    sp.add_argument("trace", help="NDJSON file, or - for stdin")
+    sp.add_argument("--plan", action="append", metavar="YAML",
+                    help="plan the trace claims to run (repeatable); enables contract/condition checks")
+    sp.add_argument("--extract", action="store_true",
+                    help="input is a raw device console log: ignore lines that are not trace events")
+    sp.add_argument("--require-overlap", action="append", metavar="PLAN_ID=N",
+                    help="fail unless a run of PLAN_ID had >= N steps in flight at once (repeatable)")
+    sp.add_argument("--tolerance-ms", type=float, default=0.0,
+                    help="slack for timing checks on real hardware (default 0)")
+    sp.set_defaults(fn=cmd_replay)
 
     sp = sub.add_parser("skills", help="list registered skill contracts")
     sp.add_argument("--format", choices=["human", "json"], default="human")

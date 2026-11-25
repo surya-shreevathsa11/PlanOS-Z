@@ -8,6 +8,7 @@
 #include "planosz/hal.h"
 #include "planosz/ingress.h"
 #include "planosz/ir.h"
+#include "planosz/ir_wire.h"
 #include "planosz/registry.h"
 #include "planosz/resource.h"
 #include "planosz/skills.h"

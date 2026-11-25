@@ -1,5 +1,7 @@
 /* Skill handlers. They talk to the world only through the HAL and never own the scheduler.
- * Argument order follows the IDL arg order (see generated skill_table.gen.c). */
+ * Argument order follows the IDL arg order (see generated skill_table.gen.c). Handlers are
+ * called from executor worker threads, possibly several at once: no shared mutable state.
+ * Every numeric output is reported in milli-units (what `when` conditions compare against). */
 #include <stdbool.h>
 #include "planosz/hal.h"
 #include "planosz/skill_table.gen.h"
@@ -12,9 +14,18 @@ enum planosz_code planosz_skill_dispatch(const struct planosz_ir_step *s, int32_
 
 	*out = 0;
 	switch (s->skill_idx) {
-	case PLANOSZ_SKILL_SENSOR_READ: /* args: sensor, samples */
-		rc = hal->sensor_read((uint8_t)s->args[0], out);
+	case PLANOSZ_SKILL_SENSOR_READ: { /* args: sensor, samples -> mean of `samples` conversions, milli-units */
+		int64_t acc = 0;
+
+		for (int32_t k = 0; k < s->args[1] && rc == 0; k++) {
+			int32_t v = 0;
+
+			rc = hal->sensor_read((uint8_t)s->args[0], &v);
+			acc += v;
+		}
+		*out = s->args[1] > 0 ? (int32_t)(acc / s->args[1]) : 0;
 		break;
+	}
 	case PLANOSZ_SKILL_ACTUATOR_PULSE: { /* args: channel, count, on_ms, off_ms */
 		for (int32_t k = 0; k < s->args[1] && rc == 0; k++) {
 			rc = hal->output_set((uint8_t)s->args[0], true);
@@ -33,11 +44,11 @@ enum planosz_code planosz_skill_dispatch(const struct planosz_ir_step *s, int32_
 	}
 	case PLANOSZ_SKILL_WAIT: /* args: duration_ms */
 		rc = hal->delay_ms((uint32_t)s->args[0]);
-		*out = s->args[0];
+		*out = s->args[0] * 1000; /* waited_ms in milli-units (like every numeric output) */
 		break;
 	case PLANOSZ_SKILL_POWER_IDLE: /* args: duration_ms, mode(0=light,1=deep) */
 		rc = hal->idle_ms((uint32_t)s->args[0], s->args[1] == 1);
-		*out = s->args[0];
+		*out = s->args[0] * 1000;
 		break;
 	case PLANOSZ_SKILL_SYS_INFO: { /* args: field */
 		char buf[32];
@@ -46,7 +57,7 @@ enum planosz_code planosz_skill_dispatch(const struct planosz_ir_step *s, int32_
 		break;
 	}
 	case PLANOSZ_SKILL_DIAG_REPORT: /* args: scope - the trace itself is the report sink */
-		*out = s->args[0] == 0 ? 1 : 4;
+		*out = (s->args[0] == 0 ? 1 : 4) * 1000;
 		break;
 	case PLANOSZ_SKILL_ACTUATOR_CONTACTOR: /* args: state, settle_ms */
 		rc = hal->delay_ms((uint32_t)s->args[1]);

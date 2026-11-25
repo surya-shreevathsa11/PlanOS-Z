@@ -21,3 +21,34 @@ int planosz_registry_find(const char *skill_id)
 	}
 	return -1;
 }
+
+int planosz_registry_derive(unsigned int skill_idx, const int32_t *args, struct planosz_derived *out)
+{
+	const struct planosz_skill_contract *c = planosz_registry_get(skill_idx);
+
+	if (c == NULL || args == NULL || out == NULL) {
+		return -1;
+	}
+	out->wcet_ms = c->wcet_fn(args);
+	out->excl_mask = 0;
+	out->shared_mask = 0;
+	for (unsigned int k = 0; k < c->n_claims; k++) {
+		const struct planosz_claim *cl = &c->claims[k];
+		unsigned int variant = 0;
+		uint32_t bit;
+
+		if (cl->arg >= 0) {
+			if (args[cl->arg] < 0 || (uint32_t)args[cl->arg] >= cl->n_variants) {
+				return -1;
+			}
+			variant = (unsigned int)args[cl->arg];
+		}
+		bit = 1u << cl->res[variant];
+		if (cl->mode == PLANOSZ_CLAIM_EXCLUSIVE) {
+			out->excl_mask |= bit;
+		} else {
+			out->shared_mask |= bit;
+		}
+	}
+	return 0;
+}

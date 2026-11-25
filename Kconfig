@@ -23,9 +23,42 @@ config PLANOSZ_BACKEND_ESP32
 
 endchoice
 
+config PLANOSZ_EXECUTOR_PARALLEL
+	bool "Parallel DAG executor (worker threads)"
+	default y
+	help
+	  Run independent plan steps concurrently on worker threads. Admission then uses the
+	  matching WCET bound (critical path / list-scheduling bound). When disabled the
+	  executor has a single worker and admission uses the sum of step WCETs.
+
+config PLANOSZ_EXEC_WORKERS
+	int "Executor worker threads"
+	depends on PLANOSZ_EXECUTOR_PARALLEL
+	range 2 8
+	default 2
+	help
+	  Maximum number of steps in flight. Admission's WCET bound is computed for exactly
+	  this many workers.
+
+config PLANOSZ_WORKER_STACK_SIZE
+	int "Executor worker thread stack size"
+	default 3072
+
+config PLANOSZ_WORKER_PRIORITY
+	int "Executor worker preemptible thread priority"
+	default 7
+
 config PLANOSZ_SHELL
-	bool "'planosz' shell commands (plans, admit, run, skills)"
+	bool "'planosz' shell commands (plans, admit, run, load, skills)"
 	default y
 	depends on SHELL
+
+# Pasting IR upload chunks (192 base64 chars per line) needs a bigger command buffer, and the
+# shell thread runs the executor's coordinator loop.
+configdefault SHELL_CMD_BUFF_SIZE
+	default 512 if PLANOSZ_SHELL
+
+configdefault SHELL_STACK_SIZE
+	default 4096 if PLANOSZ_SHELL
 
 endif # PLANOSZ

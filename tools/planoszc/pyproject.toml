@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "planoszc"
-version = "0.1.0"
-description = "PlanOS-Z host tool: job-pack compiler, static checker, admission gate and fake executor"
+version = "1.0.0"
+description = "PlanOS-Z host tool: job-pack compiler, static checker, admission gate, fake executor, UART IR encoder and trace replay"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }

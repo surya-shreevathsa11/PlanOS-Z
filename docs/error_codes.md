@@ -17,8 +17,8 @@ Rule: **append only**. Never rename or renumber a code.
 | 2 | `REJECT_BAD_ARGS` | 2 per-step | Missing/unknown arg, wrong type, enum miss, or value outside the contract's range. | Fix the args; see `planoszc skills`. |
 | 3 | `REJECT_PERMISSION` | 2 per-step | The skill needs a permission the plan did not declare, **or** the plan asks for one the device policy does not grant. | Declare it in `permissions:` / change device grants. |
 | 4 | `REJECT_RESOURCE_CONFLICT` | 3 resources | Two steps with no ordering between them could run at the same time and one claims a resource exclusively. | Order them with `needs:` or use different resources. |
-| 5 | `REJECT_DEADLINE_INFEASIBLE` | 4 timing | Worst-case time from the contracts (critical path, or sum of steps for a sequential executor) exceeds `deadline_ms`. | Shorten the job or relax the deadline. |
-| 6 | `REJECT_UNSUPPORTED_IR` | device | IR version/format not understood by this runtime. Reserved for the device ingress; the host tool never emits it. | Recompile with a matching `planoszc`. |
+| 5 | `REJECT_DEADLINE_INFEASIBLE` | 4 timing | Worst-case time from the contracts (critical path, sum, or Graham bound depending on the executor's worker count; on the device recomputed from the device skill table, not the IR) exceeds `deadline_ms`. | Shorten the job or relax the deadline. |
+| 6 | `REJECT_UNSUPPORTED_IR` | device | Uploaded IR (`planosz load ...`) has a bad magic, version, flags, CRC, length or identifier. Emitted by the device ingress as a `load` record (no plan is admitted or run); the host tool never emits it. | Recompile with a matching `planoszc` and re-paste (`planoszc compile --emit uart`). |
 | 7 | `REJECT_SAFETY_CLASS` | 2 per-step | `HAZARDOUS` skill while policy forbids it, or `REQUIRES_CONFIRM` skill without `confirm: true`. | Explicit confirmation / device policy. |
 | 8 | `REJECT_BAD_PLAN` | 1 structure | Malformed plan: schema violation, duplicate id, unknown dependency, dependency cycle, bad `when`. | Fix the document. |
 

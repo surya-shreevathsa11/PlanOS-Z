@@ -1,11 +1,13 @@
-/* Runtime resource lock table (bit-masks; admission guarantees no conflicts, this enforces it). */
+/* Runtime resource lock table (bit-masks in the device resource space; admission guarantees
+ * no conflicts, this enforces it). Exclusive claims are a bit-set, shared claims are
+ * reference-counted. Callers serialise access (the executor holds its run lock). */
 #ifndef PLANOSZ_RESOURCE_H_
 #define PLANOSZ_RESOURCE_H_
 
 #include <stdint.h>
 
 void planosz_res_reset(void);
-/* 0 on success, -1 (busy) if an exclusive claim would overlap. */
+/* 0 on success, -1 (busy) if an exclusive claim would overlap. All-or-nothing. */
 int planosz_res_acquire(uint32_t excl_mask, uint32_t shared_mask);
 void planosz_res_release(uint32_t excl_mask, uint32_t shared_mask);
 

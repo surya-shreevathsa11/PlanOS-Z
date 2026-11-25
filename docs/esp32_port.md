@@ -14,7 +14,8 @@ This page records what exists and the exact steps to close the gap.
   aliases `warn-lamp`, `cooling-fan`, `buzzer`, defined by
   `apps/planosz_node/boards/esp32_devkitc_procpu.overlay` (GPIO2 / GPIO4 / GPIO5).
 * Selected automatically: `PLANOSZ_BACKEND_ESP32` is the Kconfig default on ESP32 SoCs.
-* Measured build (v0.1): FLASH 174,848 B (4.2 % of 4 MB), DRAM 16,568 B (8.4 %).
+* Measured build (v1.0, parallel executor with 2 worker threads): FLASH 180,704 B (4.3 % of 4 MB). The
+  parallel executor and upload path compile for the Xtensa target; they have not run on silicon.
 
 ```bash
 make zephyr-setup
@@ -36,7 +37,8 @@ make esp32-build          # → build/esp32/zephyr/zephyr.bin
 1. Wire LEDs (with resistors) to GPIO2/4/5, or edit the overlay.
 2. `. tools/zephyr_env.sh && west flash -d build/esp32` (esptool over USB; udev rules / dialout
    group may be needed). Console: `west espressif monitor` or `picocom /dev/ttyUSB0 -b 115200`.
-3. `planosz plans`, `planosz run accept` — expect the same admit event as `native_sim` and a
+3. `planosz plans`, `planosz run accept`, `planosz run parallel` (check the overlap in the trace
+   with `planoszc replay --extract --require-overlap`), and an upload from `docs/uart_upload.md` — expect the same admit event as `native_sim` and a
    visibly pulsing lamp. `planosz run conflict` must reject with `REJECT_RESOURCE_CONFLICT`.
 4. **Measure** `sensor.read` and `actuator.pulse` latency with a scope or `k_uptime_get`; replace
    the guessed WCET expressions with measured-max-plus-margin and write the method in the IDL

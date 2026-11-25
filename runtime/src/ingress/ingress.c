@@ -1,17 +1,11 @@
-/* Ingress (plan registry + submit path) and, with CONFIG_PLANOSZ_SHELL, Zephyr shell commands:
- *   planosz status            runtime summary
- *   planosz skills            registered contracts
- *   planosz plans             plans registered by the app
- *   planosz admit <name>      admission decision only (NDJSON on the trace sink)
- *   planosz run <name>        admit, then execute if accepted
- */
+/* Ingress core: plan registry, upload slot glue and the serialised admit -> execute path.
+ * Portable (host-tested with the pthread OSAL); the Zephyr shell commands are in ingress_shell.c. */
+#include <errno.h>
 #include <string.h>
-#include <zephyr/kernel.h>
-#ifdef CONFIG_PLANOSZ_SHELL
-#include <zephyr/shell/shell.h>
-#endif
+#include "planosz/ingress.h"
+#include "planosz/ir_wire.h"
+#include "planosz/osal.h"
 #include "planosz/planosz.h"
-#include "planosz/skill_table.gen.h"
 
 static struct {
 	const char *name;
@@ -19,11 +13,28 @@ static struct {
 } plans[PLANOSZ_MAX_REGISTERED_PLANS];
 static int n_plans;
 
+static struct planosz_mutex lock;
+static int lock_ready;
+
 static const struct planosz_policy device_policy = {
 	.granted_perm_mask = 0xffffffffu,
 	.allow_hazardous = false,
-	.sequential_executor = !PLANOSZ_EXECUTOR_PARALLEL,
+	.workers = PLANOSZ_EXEC_WORKERS, /* must equal the executor's worker count */
 };
+
+static void lock_take(void)
+{
+	if (!lock_ready) { /* first use happens during single-threaded boot */
+		planosz_mutex_init(&lock);
+		lock_ready = 1;
+	}
+	planosz_mutex_lock(&lock);
+}
+
+static void lock_give(void)
+{
+	planosz_mutex_unlock(&lock);
+}
 
 int planosz_ingress_register(const char *name, const struct planosz_ir_plan *plan)
 {
@@ -43,86 +54,73 @@ const struct planosz_ir_plan *planosz_ingress_find(const char *name)
 			return plans[i].plan;
 		}
 	}
-	return NULL;
+	return strcmp(name, PLANOSZ_UPLOADED_PLAN) == 0 ? planosz_upload_plan() : NULL;
+}
+
+size_t planosz_ingress_count(void)
+{
+	return (size_t)n_plans;
+}
+
+const char *planosz_ingress_name(size_t idx)
+{
+	return idx < (size_t)n_plans ? plans[idx].name : NULL;
+}
+
+const struct planosz_policy *planosz_ingress_policy(void)
+{
+	return &device_policy;
 }
 
 enum planosz_code planosz_ingress_submit(const struct planosz_ir_plan *plan, bool execute)
 {
-	struct planosz_admission_result adm = planosz_admit(plan, &device_policy);
+	struct planosz_admission_result adm;
+	enum planosz_code rc;
 
+	lock_take();
+	adm = planosz_admit(plan, &device_policy);
 	planosz_trace_reset();
-	planosz_trace_admit(plan, &adm); /* before any side effect */
-	if (adm.code != PLANOSZ_OK || !execute) {
-		return adm.code;
+	planosz_trace_admit(plan, &adm, &device_policy); /* before any side effect */
+	rc = adm.code;
+	if (adm.code == PLANOSZ_OK && execute) {
+		rc = planosz_exec_run(plan).code;
 	}
-	return planosz_exec_run(plan).code;
+	lock_give();
+	return rc;
 }
 
-#ifdef CONFIG_PLANOSZ_SHELL
-static int cmd_status(const struct shell *sh, size_t argc, char **argv)
+void planosz_ingress_load_begin(void)
 {
-	ARG_UNUSED(argc);
-	ARG_UNUSED(argv);
-	shell_print(sh, "PlanOS-Z runtime: ir_version=%d skills=%u plans=%d uptime_ms=%u", PLANOSZ_IR_VERSION,
-		    (unsigned int)planosz_registry_count(), n_plans, (unsigned int)k_uptime_get_32());
-	return 0;
+	lock_take();
+	planosz_upload_begin();
+	lock_give();
 }
 
-static int cmd_skills(const struct shell *sh, size_t argc, char **argv)
+enum planosz_code planosz_ingress_load_data(const char *b64)
 {
-	ARG_UNUSED(argc);
-	ARG_UNUSED(argv);
-	for (unsigned int i = 0; i < planosz_registry_count(); i++) {
-		const struct planosz_skill_contract *c = planosz_registry_get(i);
+	enum planosz_code rc;
 
-		shell_print(sh, "%-18s v%u safety=%u args=%u wcet=\"%s\"", c->skill_id, c->version, c->safety_class,
-			    c->n_args, c->wcet_model);
+	lock_take();
+	rc = planosz_upload_data(b64, NULL);
+	lock_give();
+	return rc;
+}
+
+enum planosz_code planosz_ingress_load_end(void)
+{
+	const char *why = "";
+	enum planosz_code rc;
+
+	lock_take();
+	rc = planosz_upload_end(&why);
+	planosz_trace_reset();
+	if (rc == PLANOSZ_OK) {
+		planosz_trace_emit(0, "load", "\"plan\":\"%s\",\"status\":\"OK\",\"code\":\"OK\",\"bytes\":%u",
+				   planosz_upload_plan()->plan_id, (unsigned int)planosz_upload_bytes());
+	} else {
+		planosz_trace_emit(0, "load", "\"plan\":\"-\",\"status\":\"REJECT\",\"code\":\"%s\",\"detail\":\"%s\","
+				   "\"bytes\":%u", planosz_code_str(rc), why, (unsigned int)planosz_upload_bytes());
 	}
-	return 0;
+	lock_give();
+	return rc;
 }
-
-static int cmd_plans(const struct shell *sh, size_t argc, char **argv)
-{
-	ARG_UNUSED(argc);
-	ARG_UNUSED(argv);
-	for (int i = 0; i < n_plans; i++) {
-		shell_print(sh, "%s (%s, %u steps)", plans[i].name, plans[i].plan->plan_id, plans[i].plan->n_steps);
-	}
-	return 0;
-}
-
-static int submit_named(const struct shell *sh, const char *name, bool execute)
-{
-	const struct planosz_ir_plan *p = planosz_ingress_find(name);
-
-	if (p == NULL) {
-		shell_error(sh, "unknown plan '%s' (try: planosz plans)", name);
-		return -ENOENT;
-	}
-	enum planosz_code rc = planosz_ingress_submit(p, execute);
-
-	shell_print(sh, "%s %s", rc == PLANOSZ_OK ? "OK" : "FAILED", planosz_code_str(rc));
-	return 0;
-}
-
-static int cmd_admit(const struct shell *sh, size_t argc, char **argv)
-{
-	ARG_UNUSED(argc);
-	return submit_named(sh, argv[1], false);
-}
-
-static int cmd_run(const struct shell *sh, size_t argc, char **argv)
-{
-	ARG_UNUSED(argc);
-	return submit_named(sh, argv[1], true);
-}
-
-SHELL_STATIC_SUBCMD_SET_CREATE(planosz_cmds,
-	SHELL_CMD_ARG(status, NULL, "Runtime summary", cmd_status, 1, 0),
-	SHELL_CMD_ARG(skills, NULL, "List registered skill contracts", cmd_skills, 1, 0),
-	SHELL_CMD_ARG(plans, NULL, "List plans registered by the app", cmd_plans, 1, 0),
-	SHELL_CMD_ARG(admit, NULL, "<plan> Admission decision only", cmd_admit, 2, 0),
-	SHELL_CMD_ARG(run, NULL, "<plan> Admit, then execute", cmd_run, 2, 0),
-	SHELL_SUBCMD_SET_END);
-SHELL_CMD_REGISTER(planosz, &planosz_cmds, "PlanOS-Z job-pack runtime", NULL);
-#endif /* CONFIG_PLANOSZ_SHELL */

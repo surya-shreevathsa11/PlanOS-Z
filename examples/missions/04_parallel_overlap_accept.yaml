@@ -1,0 +1,25 @@
+# ACCEPT only because the device runs steps in parallel: three independent ADC sweeps
+# (8 samples each, WCET 200 ms apiece) then a report.
+#   unbounded parallelism : critical path        = 230 ms
+#   device, 2 workers     : list-scheduling bound = 430 ms  (3 sweeps > 2 workers)  -> ACCEPT (deadline 500)
+#   sequential (1 worker) : sum                  = 630 ms                           -> REJECT
+# On native_sim two sweeps run side by side (~120 ms each), the third follows: total ~245 ms,
+# not ~365 ms. All three share adc0 (shared claim) so they may overlap.
+plan_id: demo.parallel_overlap
+description: Three independent sensor sweeps, then a report; needs the parallel executor to fit.
+deadline_ms: 500
+permissions: [READ_SENSOR, DIAG]
+steps:
+  - id: volt
+    action: sensor.read
+    args: { sensor: pack_voltage, samples: 8 }
+  - id: cool
+    action: sensor.read
+    args: { sensor: coolant_proxy, samples: 8 }
+  - id: cell
+    action: sensor.read
+    args: { sensor: cell_temp, samples: 8 }
+  - id: report
+    action: diag.report
+    args: { scope: summary }
+    needs: [volt, cool, cell]

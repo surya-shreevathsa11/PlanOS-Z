@@ -60,7 +60,9 @@ class ResourceManager:
                 del self.held[name]
 
 
-def run(adm: Admission, backend: FakeBackend, trace: Trace) -> RunResult:
+def run(adm: Admission, backend: FakeBackend, trace: Trace, max_workers: int | None = None) -> RunResult:
+    """`max_workers` limits how many steps may be in flight (None = unbounded, like the original
+    virtual-time model). Pass the same value the plan was admitted with."""
     assert adm.accepted, "executor must only receive admitted plans"
     steps: dict[str, StepInfo] = {s.id: s for s in adm.steps}
     deadline = adm.deadline_ms or 0
@@ -94,7 +96,7 @@ def run(adm: Admission, backend: FakeBackend, trace: Trace) -> RunResult:
                     continue
                 if st.when:
                     ref_step, ref_field = st.when["ref"].split(".")
-                    val = outputs[ref_step][ref_field]
+                    val = outputs.get(ref_step, {}).get(ref_field, 0)  # skipped producer reads as 0 (device parity)
                     ok = OPS[st.when["op"]](val, st.when["value"])
                     if not ok:
                         trace.emit({"type": "step_skip", "t_ms": t, "step": st.id,
@@ -103,6 +105,8 @@ def run(adm: Admission, backend: FakeBackend, trace: Trace) -> RunResult:
                         done.add(st.id)
                         progressed = True
                         continue
+                if max_workers is not None and len(running) >= max_workers:
+                    continue  # all workers busy: this ready step waits for a completion
                 busy = locks.acquire(st.id, st.claims)
                 if busy:
                     trace.emit({"type": "step_error", "t_ms": t, "step": st.id,
@@ -110,7 +114,8 @@ def run(adm: Admission, backend: FakeBackend, trace: Trace) -> RunResult:
                     return abort(E.EXEC_SKILL_FAIL, t, st.id)
                 started.add(st.id)
                 trace.emit({"type": "step_start", "t_ms": t, "step": st.id, "action": st.action,
-                            "args": st.args})
+                            "args": st.args, "wcet_ms": st.wcet_ms, "needs": st.needs,
+                            "claims": [f"{n}:{m}" for n, m in st.claims]})
                 try:
                     backend.check_available(st.contract)
                 except SkillFailure as sf:

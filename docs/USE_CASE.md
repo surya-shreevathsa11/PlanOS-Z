@@ -26,7 +26,7 @@ The device only runs a job after answering, in order:
    Is the skill's **safety class** allowed (hazardous contactor = no by default)?
 4. Can any two steps that may run at the same time **fight over a resource**
    (exclusive lamp output, exclusive trace sink, exclusive power domain)?
-5. Is the **worst-case time** (critical path; sum of steps on the sequential device executor) within the deadline?
+5. Is the **worst-case time** (critical path, or a worker-count-aware bound on the device's thread pool) within the deadline?
 
 Each "no" is a stable code (`REJECT_UNKNOWN_SKILL`, `REJECT_BAD_ARGS`, `REJECT_PERMISSION`,
 `REJECT_SAFETY_CLASS`, `REJECT_RESOURCE_CONFLICT`, `REJECT_DEADLINE_INFEASIBLE`,

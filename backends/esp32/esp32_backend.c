@@ -1,4 +1,4 @@
-/* ESP32 backend (v0.1 stub-with-teeth).
+/* ESP32 backend (stub-with-teeth: real GPIO outputs, simulated sensors).
  *  - Outputs: real GPIO through devicetree aliases `warn-lamp`, `cooling-fan`, `buzzer`
  *    (see apps/planosz_node/boards/esp32_devkitc_procpu.overlay).
  *  - Sensors: SIMULATED values until real ADC/I2C parts are wired (roadmap phase 8).
@@ -17,6 +17,8 @@ static const struct gpio_dt_spec outputs[3] = {
 	OUT_SPEC(cooling_fan),
 	OUT_SPEC(buzzer),
 };
+#define SIM_ADC_CONVERSION_MS 15 /* simulated conversion time per sample until a real ADC is wired */
+
 static const int32_t sensor_milli[4] = { 48200, 31200, 27500, 24000 };
 static bool outputs_ready;
 
@@ -37,7 +39,7 @@ static int esp_sensor_read(uint8_t idx, int32_t *milli)
 	if (idx >= ARRAY_SIZE(sensor_milli)) {
 		return -EINVAL;
 	}
-	k_msleep(5);
+	k_msleep(SIM_ADC_CONVERSION_MS);
 	*milli = sensor_milli[idx]; /* TODO(phase 8): ADC / I2C driver */
 	return 0;
 }
@@ -70,7 +72,7 @@ static int esp_sys_info(uint8_t field, char *buf, size_t len)
 {
 	switch (field) {
 	case 0: snprintf(buf, len, "%ums", (unsigned int)k_uptime_get_32()); break;
-	case 1: snprintf(buf, len, "planosz-0.1.0"); break;
+	case 1: snprintf(buf, len, "planosz-1.0.0"); break;
 	case 2: snprintf(buf, len, "esp32_devkitc"); break;
 	default: snprintf(buf, len, "n/a"); break;
 	}

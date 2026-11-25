@@ -50,10 +50,17 @@ class Policy:
 
     granted_permissions: set[str] | None = None  # None = grant everything requested
     allow_hazardous: bool = False
-    # Timing model must match the executor that will run the plan:
-    #   False -> concurrent steps overlap: WCET = critical path (host executor)
-    #   True  -> steps run one after another: WCET = sum of all steps (device executor v0.1)
-    sequential_executor: bool = False
+    # Timing model must match the executor that will run the plan (device default: 2 workers):
+    #   workers=None -> unbounded parallelism: WCET = critical path (host virtual-time executor)
+    #   workers=1    -> steps run one after another: WCET = sum of all steps
+    #   workers=N    -> critical path when the plan never has more than N steps runnable at once,
+    #                   otherwise Graham's list-scheduling bound min(sum, cp + ceil((sum-cp)/N))
+    workers: int | None = None
+    sequential_executor: bool = False  # legacy spelling of workers=1
+
+    @property
+    def effective_workers(self) -> int | None:
+        return 1 if self.sequential_executor else self.workers
 
 
 @dataclass
@@ -96,6 +103,9 @@ class Admission:
     wcet_ms: int | None = None
     critical_path: list[str] = field(default_factory=list)
     mutex: dict[str, set[str]] = field(default_factory=dict)
+    critical_path_ms: int | None = None
+    max_concurrency: int | None = None  # largest set of steps that can ever run at once
+    workers: int | None = None
 
     @property
     def accepted(self) -> bool:
@@ -126,6 +136,8 @@ class Admission:
             ev["wcet_ms"] = self.wcet_ms
         if self.deadline_ms is not None:
             ev["deadline_ms"] = self.deadline_ms
+        if self.workers is not None:
+            ev["workers"] = self.workers
         if self.violations:
             ev["detail"] = self.primary_detail()
             ev["violations"] = [v.to_dict() for v in self.violations]
@@ -154,6 +166,43 @@ def _topo(ids: list[str], needs: dict[str, list[str]]) -> tuple[list[str], list[
     if len(order) != len(ids):
         return order, [i for i in ids if i not in order]
     return order, None
+
+
+def max_concurrency(ids: list[str], anc: dict[str, set[str]], mutex: dict[str, set[str]]) -> int:
+    """Size of the largest set of pairwise-concurrent steps (max clique, Bron-Kerbosch).
+
+    Two steps are concurrent iff neither is an ancestor of the other and they are not
+    provably exclusive branches. Mirrors planosz_admit() on the device."""
+    adj = {
+        a: {b for b in ids if b != a and b not in anc[a] and a not in anc[b] and b not in mutex.get(a, ())}
+        for a in ids
+    }
+    best = 0
+
+    def bk(size: int, p: set[str], x: set[str]) -> None:
+        nonlocal best
+        if not p and not x:
+            best = max(best, size)
+            return
+        if size + len(p) <= best:
+            return
+        pivot = max(p | x, key=lambda u: len(p & adj[u]))
+        for v in sorted(p - adj[pivot]):
+            bk(size + 1, p & adj[v], x & adj[v])
+            p = p - {v}
+            x = x | {v}
+
+    bk(0, set(ids), set())
+    return best
+
+
+def wcet_bound(cp: int, total: int, omega: int, workers: int | None) -> int:
+    """WCET bound for an executor with `workers` workers (see Policy)."""
+    if workers is None or (workers > 1 and omega <= workers):
+        return cp
+    if workers <= 1:
+        return total
+    return min(total, cp + -(-(total - cp) // workers))
 
 
 def _mutually_exclusive(a: StepInfo, b: StepInfo) -> bool:
@@ -339,25 +388,32 @@ def admit(plan: dict, registry: Registry, policy: Policy | None = None) -> Admis
                 best, best_p = infos[n].earliest_finish_ms, n
         st.earliest_finish_ms = best + st.wcet_ms
         pred[sid] = best_p
-    if policy.sequential_executor:
+    workers = policy.effective_workers
+    adm.workers = workers
+    total = sum(infos[i].wcet_ms for i in order)
+    end = max(order, key=lambda i: infos[i].earliest_finish_ms)
+    cp = infos[end].earliest_finish_ms
+    adm.critical_path_ms = cp
+    adm.max_concurrency = max_concurrency(order, anc, adm.mutex)
+    adm.wcet_ms = wcet_bound(cp, total, adm.max_concurrency, workers)
+    mode = ""
+    if workers == 1:
         # No overlap: every step may execute one after another, so the sum is the bound.
         run_t = 0
         for sid in order:
             run_t += infos[sid].wcet_ms
             infos[sid].earliest_finish_ms = run_t
-        adm.wcet_ms = run_t
         adm.critical_path = list(order)
         mode = " executor=sequential"
     else:
-        end = max(order, key=lambda i: infos[i].earliest_finish_ms)
-        adm.wcet_ms = infos[end].earliest_finish_ms
         path = []
         cur: str | None = end
         while cur:
             path.append(cur)
             cur = pred[cur]
         adm.critical_path = list(reversed(path))
-        mode = ""
+        if workers is not None:
+            mode = f" workers={workers} bound={adm.wcet_ms} cp={cp} max_concurrency={adm.max_concurrency}"
     if adm.wcet_ms > plan["deadline_ms"]:
         adm.violations.append(
             Violation(

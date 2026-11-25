@@ -50,8 +50,11 @@ steps:                                # 1..32 steps
   skills need device policy (`--allow-hazardous`), a plan cannot grant itself that.
 * **Deadline** is compared with the worst-case time from the contract WCETs
   (`estimated_wcet_ms ≤ deadline_ms` is accepted; equality passes). Default model: *critical
-  path* (concurrent steps overlap, host executor). `--executor sequential` (device v0.1) uses the
-  *sum* of all steps instead.
+  path* (unbounded workers, host executor). `--workers N` models an N-thread executor (the
+  device default is 2): critical path if at most N steps can ever run at once, otherwise
+  Graham's bound; `--workers 1` (alias `--executor sequential`) uses the *sum* of all steps.
+  `when` must reference the producing step's primary (first) numeric return field to compile
+  to the device IR.
 
 ## Not in v1
 

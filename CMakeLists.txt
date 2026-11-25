@@ -16,8 +16,11 @@ if(CONFIG_PLANOSZ)
     runtime/src/scheduler/executor.c
     runtime/src/trace/trace.c
     runtime/src/ingress/ingress.c
+    runtime/src/ingress/ir_wire.c
+    runtime/src/osal/osal_zephyr.c
     skills/src/skills.c
   )
+  zephyr_library_sources_ifdef(CONFIG_PLANOSZ_SHELL runtime/src/ingress/ingress_shell.c)
   zephyr_library_sources_ifdef(CONFIG_PLANOSZ_BACKEND_NATIVE_SIM backends/native_sim/native_sim_backend.c)
   zephyr_library_sources_ifdef(CONFIG_PLANOSZ_BACKEND_ESP32 backends/esp32/esp32_backend.c)
 endif()

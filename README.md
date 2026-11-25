@@ -25,11 +25,15 @@ and nothing here depends on any vendor's ECU, protocol or code.
                   ▼
   ┌─────────────────────────────────────┐   device: Zephyr runtime (C)
   │ admission → executor → NDJSON trace │   - re-checks structure/args/perms/safety
-  │ registry · resources · skills · HAL │   - WCET/resource masks still come from host IR (v1)
+  │ registry · resources · skills · HAL │   - recomputes WCET + resource masks itself: host IR claims are ignored
   └───────────────┬─────────────────────┘
                   ▼
         backends/native_sim   backends/esp32
 ```
+
+Plans reach the device compiled into the image, or **pasted over the UART/shell** as a versioned,
+CRC-checked blob (`planoszc compile --emit uart`, [docs/uart_upload.md](docs/uart_upload.md)).
+Traces from the host or from a device console are validated by `planoszc replay`.
 
 ## The problem
 
@@ -65,7 +69,7 @@ flashed on hardware** — see [docs/esp32_port.md](docs/esp32_port.md) and [ROAD
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e "tools/planoszc[dev]"      # or: make install
-python -m pytest tests/host -q            # 56 tests, ~1 s (or: make test)
+python -m pytest tests/host -q            # 114 tests, ~10 s (or: make test)
 
 planoszc skills                           # the 7 registered contracts
 planoszc check examples/missions/01_parallel_sense_accept.yaml
@@ -76,9 +80,10 @@ planoszc run   examples/missions/01_parallel_sense_accept.yaml
 | Command | What it does | Exit |
 |---|---|---|
 | `planoszc check PLAN` | static analysis: contracts, deps, resources, per-step WCET table | 0 ok / 2 rejected |
-| `planoszc admit PLAN` | admission gate with device policy (`--grant`, `--allow-hazardous`) | 0 / 2 |
+| `planoszc admit PLAN` | admission gate with device policy (`--grant`, `--allow-hazardous`, `--workers N` = executor thread count the bound models) | 0 / 2 |
 | `planoszc run PLAN` | admit, then execute on the deterministic fake backend; `--format ndjson`, `--trace FILE`, `--sensor N=V`, `--inject FAULT` | 0 / 2 / 3 |
-| `planoszc compile PLAN --emit c` | compile to IR (C header or JSON) for the device | 0 |
+| `planoszc compile PLAN --emit {c,json,uart}` | compile to IR for the device: C header, JSON, or the shell paste payload (`--force`, `--forge understate-wcet,strip-masks` for tamper demos) | 0 |
+| `planoszc replay TRACE` | validate an NDJSON trace / device console log (`--extract`) against the contract: causality, resources, WCET, deadline, overlap (`--plan`, `--require-overlap PLAN=N`) | 0 / 4 |
 | `planoszc skills` | list contracts | 0 |
 | `planoszc codegen` | IDL → C registry table (`runtime/src/registry/skill_table.gen.c`) | 0 |
 
@@ -144,31 +149,52 @@ Other rejects covered by tests: unknown skill, bad args, permissions (declared *
 
 ## Zephyr: the same decisions on the device
 
-The C runtime re-implements admission over the compiled IR, so the device never has to
-trust the host. `make zephyr-setup` (once) then:
+The C runtime re-implements admission over the compiled IR and, crucially, **does not trust the
+host's numbers**: WCET and resource masks are recomputed from the device's own generated skill
+table, and the IR's `wcet_ms` / masks are only compared and reported (`ir_wcet_mismatch`). Plans
+run on a coordinator + worker-thread executor (2 Zephyr threads by default), and admission bounds
+the time with the same worker count. `make zephyr-setup` (once) then:
 
 ```bash
-make native-sim-demo     # builds apps/planosz_node for native_sim and runs it
+make native-sim-demo     # builds apps/planosz_node for native_sim and runs 6 plans
+make native-sim-shell    # stdin/stdout shell image (upload, run); tools/ci/native_sim_shell.sh drives it
 make esp32-build         # cross-builds for esp32_devkitc/esp32/procpu
 ```
 
-Real output from the Zephyr build (native_sim). The device executor is sequential, so the
-device admits against the **sum** of WCETs (1550 ms, vs 1180 ms critical path on the host:
-`planoszc admit --executor sequential` reproduces the device number):
+Real output from the Zephyr build (native_sim, abridged). The parallel plan has three 128 ms
+sensor sweeps: `volt` and `cool` start together at 0 ms, `cell` takes the next free worker at 128 ms,
+and the run ends at 256 ms instead of 384 ms sequentially. The two `*_forged` plans carry IR that
+claims every step costs 1 ms / holds no resources; the device still rejects them:
 
 ```text
-{"seq":0,"type":"admit","t_ms":0,"plan":"demo.parallel_sense","status":"ACCEPT","code":"OK","wcet_ms":1550,"deadline_ms":2000,"steps":5}
+{"seq":0,"type":"admit","t_ms":0,"plan":"demo.parallel_sense","status":"ACCEPT","code":"OK","wcet_ms":1180,"deadline_ms":2000,"workers":2,"steps":5}
 ...
 RESULT: OK
-{"seq":0,"type":"admit","t_ms":0,"plan":"demo.deadline_reject","status":"REJECT","code":"REJECT_DEADLINE_INFEASIBLE","step":-1,"wcet_ms":2964,"deadline_ms":2000}
-RESULT: REJECT_DEADLINE_INFEASIBLE
-{"seq":0,"type":"admit","t_ms":0,"plan":"demo.resource_conflict","status":"REJECT","code":"REJECT_RESOURCE_CONFLICT","step":1,"wcet_ms":0,"deadline_ms":3000}
-RESULT: REJECT_RESOURCE_CONFLICT
+{"seq":0,"type":"admit",...,"plan":"demo.deadline_reject","status":"REJECT","code":"REJECT_DEADLINE_INFEASIBLE","wcet_ms":2594,"deadline_ms":2000,"workers":2}
+{"seq":0,"type":"admit",...,"plan":"demo.resource_conflict","status":"REJECT","code":"REJECT_RESOURCE_CONFLICT","step":1,"workers":2}
+{"seq":0,"type":"admit","t_ms":0,"plan":"demo.parallel_overlap","status":"ACCEPT","code":"OK","wcet_ms":430,"deadline_ms":500,"workers":2,"steps":4}
+{"seq":2,"type":"step_start","t_ms":0,"step":"volt",...,"wcet_ms":200,"claims":["adc0:shared","power_domain:shared"]}
+{"seq":3,"type":"step_start","t_ms":0,"step":"cool",...}                    <- overlap
+{"seq":10,"type":"run_end","t_ms":256,"plan":"demo.parallel_overlap","status":"OK","code":"OK","total_ms":256}
+{"seq":0,"type":"admit",...,"plan":"demo.deadline_reject","status":"REJECT","code":"REJECT_DEADLINE_INFEASIBLE","wcet_ms":2594,...,"ir_wcet_mismatch":5}
+{"seq":0,"type":"admit",...,"plan":"demo.resource_conflict","status":"REJECT","code":"REJECT_RESOURCE_CONFLICT","step":1,...}
 ```
 
-Interactive: `build/native_sim/zephyr/zephyr.exe` prints a PTY path; attach and run
-`planosz plans`, `planosz admit conflict`, `planosz run accept`. Full bring-up, versions and
-disk/time numbers: [docs/zephyr_setup.md](docs/zephyr_setup.md).
+Check any of those logs yourself: `build/native_sim_demo/zephyr/zephyr.exe < /dev/null | planoszc replay - --extract
+--plan examples/missions/04_parallel_overlap_accept.yaml --require-overlap demo.parallel_overlap=2`.
+
+**Upload instead of rebuilding** ([docs/uart_upload.md](docs/uart_upload.md)):
+
+```text
+$ planoszc compile examples/missions/04_parallel_overlap_accept.yaml --emit uart   # paste into the shell:
+planosz load begin / planosz load data <base64>... / planosz load end   ->  load: OK demo.parallel_overlap (155 bytes)
+planosz run uploaded                                                    ->  admit ACCEPT, executes, 256 ms
+```
+
+A flipped bit, a different version byte, a truncated paste: `REJECT_UNSUPPORTED_IR`, nothing runs.
+
+Interactive: `planosz plans`, `planosz admit conflict`, `planosz run parallel`, `planosz run uploaded`.
+Full bring-up, versions and disk/time numbers: [docs/zephyr_setup.md](docs/zephyr_setup.md).
 
 ## How a job is judged
 
@@ -179,8 +205,9 @@ disk/time numbers: [docs/zephyr_setup.md](docs/zephyr_setup.md).
    resource if either claims it *exclusively* (complementary `when` branches are recognised
    as mutually exclusive) → `REJECT_RESOURCE_CONFLICT`
 4. **Timing** – worst-case time from the contract WCETs, counting every conditional branch,
-   must fit `deadline_ms` → `REJECT_DEADLINE_INFEASIBLE`. The model matches the executor:
-   critical path when steps can overlap (host), sum of steps when they run one by one (device v0.1)
+   must fit `deadline_ms` → `REJECT_DEADLINE_INFEASIBLE`. The bound models the executor's worker
+   pool: critical path if the plan never needs more than N steps at once, Graham's list-scheduling
+   bound otherwise, the sum for one worker. On the device the WCETs come from the device's table.
 
 Details and limits: [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -189,15 +216,16 @@ Details and limits: [ARCHITECTURE.md](ARCHITECTURE.md).
 | Path | Contents |
 |---|---|
 | `idl/skills/*.yaml`, `idl/schemas/` | 7 skill contracts + JSON Schemas for contracts and plans |
-| `tools/planoszc/` | Python package: IDL loader, admission, executor, compile, codegen, CLI |
+| `tools/planoszc/` | Python package: IDL loader, admission, executor, compile, codegen, wire format, replay, CLI |
+| `tools/ci/` | `native_sim_shell.sh`: scripted UART-upload test against the native_sim shell image |
 | `tools/west_commands/` | `west planosz` extension |
-| `runtime/` | C core: registry, admission, resources, executor, trace, ingress/shell |
+| `runtime/` | C core: registry (+ device WCET/mask derivation), admission, resources, parallel executor, OSAL, trace, ingress/upload/shell |
 | `skills/src/` | skill handlers (talk to the world only through the HAL) |
 | `backends/native_sim`, `backends/esp32` | one HAL implementation each |
 | `apps/planosz_node/` | Zephyr app image (shell + demo plans) |
-| `examples/missions/` | the ACCEPT / REJECT / REJECT demo job packs |
-| `traces/golden/` | golden NDJSON trace compared in CI |
-| `tests/host/` | 56 pytest tests, incl. a gcc-built C unit test cross-checked against Python |
+| `examples/missions/` | the ACCEPT / REJECT / REJECT / parallel-overlap demo job packs |
+| `traces/golden/` | golden NDJSON traces compared and replay-checked in CI |
+| `tests/host/` | 114 pytest tests, incl. the C runtime built with gcc/pthreads and fuzzed against Python |
 | `west.yml`, `zephyr/module.yml` | Zephyr workspace manifest / module definition |
 | `docs/` | error codes, skill IDL, plan language, use case, ESP32 port, Zephyr setup, master spec |
 
@@ -206,19 +234,22 @@ Details and limits: [ARCHITECTURE.md](ARCHITECTURE.md).
 [ARCHITECTURE.md](ARCHITECTURE.md) · [ROADMAP.md](ROADMAP.md) ·
 [docs/USE_CASE.md](docs/USE_CASE.md) ·
 [docs/error_codes.md](docs/error_codes.md) · [docs/skill_idl.md](docs/skill_idl.md) ·
-[docs/plan_language.md](docs/plan_language.md) · [docs/esp32_port.md](docs/esp32_port.md) ·
+[docs/plan_language.md](docs/plan_language.md) · [docs/uart_upload.md](docs/uart_upload.md) · [docs/esp32_port.md](docs/esp32_port.md) ·
 [docs/zephyr_setup.md](docs/zephyr_setup.md) · [docs/MASTER_SPEC.txt](docs/MASTER_SPEC.txt)
 
 ## Honest status
 
 | Area | State |
 |---|---|
-| `planoszc` check/admit/run/compile, 7 contracts, NDJSON, fault injection | done, tested |
-| C admission + resource table + executor + trace + registry codegen | done, host-tested with gcc and cross-checked against Python |
-| Zephyr `native_sim` build + run, shell commands | builds and runs; same ACCEPT/REJECT decisions as the host |
-| Executor parallelism on the device | **sequential in topological order**, so device admission uses the sum-of-WCET model; the host executor forks in parallel (critical-path model). Device DAG dispatch is roadmap phase 5 |
-| ESP32 | cross-builds; outputs are real GPIO, sensors simulated; **not flashed/tested on hardware** |
-| WCET | a declared contract budget, not a measured/proved bound |
+| `planoszc` check/admit/run/compile/replay, 7 contracts, NDJSON, fault injection | done, tested |
+| Device owns WCET + resource masks | **done**: generated per-skill C WCET functions and claim templates; IR `wcet_ms`/masks ignored. Tamper tests (C, native_sim, UART) show understated WCET and stripped masks still REJECT; 900 random DAGs x 4 worker counts agree with Python |
+| Parallel executor on the device | **done**: coordinator + N Zephyr worker threads, refcounted shared claims, per-step and deadline watchdogs, cooperative cancel. Admission is worker-count aware (critical path / Graham / sum). Overlap is shown on native_sim and in the host tests with real threads. Caveat: native_sim runs on simulated time on one host thread; real multi-core timing is untested |
+| UART/shell IR upload | **done**: versioned + CRC-16 wire format, `planosz load ...`, ephemeral slot, `REJECT_UNSUPPORTED_IR`, `planoszc compile --emit uart`; embedded demo plans kept for CI |
+| `planoszc replay` | **done**: causality, resources, WCET, deadline, concurrency and plan-contract checks on host traces and native_sim console logs; used in CI |
+| CI | host tests (py3.10/3.12), golden replay, native_sim demo + replay, native_sim shell upload test; see the badge/Actions tab for the latest run |
+| ESP32 | cross-builds (4.3 % flash); outputs are real GPIO, sensors simulated; **never flashed: no board was available. Nothing about real-hardware timing is claimed** |
+| WCET | declared contract budgets, **not measured** on hardware, and skills are cooperative (a stuck HAL call cannot be preempted; the watchdog reports it when the call returns) |
+| Not done | CBOR/signed IR, on-device trace ring buffer, Twister suite, `west planosz skill new` |
 
 ## Add a skill (≈15 minutes)
 
@@ -229,12 +260,15 @@ Details and limits: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Resume bullet
 
-> Built **PlanOS-Z**, a contract-driven job-pack runtime for Zephyr RTOS (ESP32 target): skill
-> IDL → generated C registry; admission control that rejects unknown skills, bad arguments,
-> permission/safety violations, exclusive-resource conflicts on dependency DAGs and
-> deadline-infeasible jobs (critical-path WCET) before any side effect; DAG executor with
-> NDJSON tracing and fault injection; host tool `planoszc` plus an on-device C re-validation
-> cross-checked against it; 56 host tests, a golden trace, and a CI workflow (host tests + `native_sim` build and run).
+> Built **PlanOS-Z**, a contract-driven job-pack runtime for Zephyr RTOS (ESP32 target): skill IDL →
+> generated C registry with per-skill WCET functions and resource claims, so the **device recomputes
+> timing and resource masks instead of trusting the host**; admission control that rejects unknown
+> skills, bad arguments, permission/safety violations, exclusive-resource conflicts and
+> deadline-infeasible jobs (worker-count-aware critical-path/Graham bound) before any side effect;
+> a thread-pool DAG executor with watchdogs and NDJSON tracing; versioned CRC'd IR upload over the
+> UART shell; a `planoszc replay` trace verifier; 114 tests (C runtime built under gcc and
+> differential-fuzzed against the Python reference, tamper tests), and CI running host tests, a
+> `native_sim` demo/replay and a scripted UART-upload check. ESP32 cross-builds; not yet flashed.
 
 ## License
 

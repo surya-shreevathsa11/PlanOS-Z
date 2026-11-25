@@ -27,6 +27,14 @@ jobs:
           echo "$out" | grep -q REJECT_DEADLINE_INFEASIBLE
           out=$(planoszc admit examples/missions/03_resource_conflict_reject.yaml || true); echo "$out"
           echo "$out" | grep -q REJECT_RESOURCE_CONFLICT
+      - name: Replay the golden traces (causality, resources, WCET, deadline, overlap)
+        run: |
+          planoszc replay traces/golden/parallel_sense_accept.ndjson --plan examples/missions/01_parallel_sense_accept.yaml
+          planoszc replay traces/golden/parallel_overlap_w2.ndjson --plan examples/missions/04_parallel_overlap_accept.yaml --require-overlap demo.parallel_overlap=2
+      - name: Replay must FAIL on a tampered trace
+        run: |
+          sed 's/"t_ms":100,"step":"report"/"t_ms":60,"step":"report"/' traces/golden/parallel_overlap_w2.ndjson > /tmp/tampered.ndjson
+          if planoszc replay /tmp/tampered.ndjson; then echo "tampered trace passed replay"; exit 1; fi
 
   zephyr-native-sim:
     name: Zephyr native_sim build + run
@@ -53,16 +61,36 @@ jobs:
         run: |
           make codegen app-plans
           git diff --exit-code -- runtime apps
+      - name: Install planoszc (replay / compile helpers)
+        working-directory: ws/planos-z
+        run: pip install -e "tools/planoszc[dev]"
       - name: Build native_sim (demo overlay)
         working-directory: ws
         env:
           ZEPHYR_TOOLCHAIN_VARIANT: host
-        run: west build -b native_sim/native/64 planos-z/apps/planosz_node -- -DEXTRA_CONF_FILE=demo.conf
-      - name: Run and assert admit/reject codes
+        run: west build -b native_sim/native/64 -d build/demo planos-z/apps/planosz_node -- -DEXTRA_CONF_FILE=demo.conf
+      - name: Run demo and assert admit/reject codes + parallel overlap
         working-directory: ws
         run: |
-          ./build/zephyr/zephyr.exe < /dev/null | tee run.log
+          ./build/demo/zephyr/zephyr.exe < /dev/null | tee run.log
           grep -q '"status":"ACCEPT"' run.log
           grep -q 'RESULT: OK' run.log
           grep -q 'RESULT: REJECT_DEADLINE_INFEASIBLE' run.log
           grep -q 'RESULT: REJECT_RESOURCE_CONFLICT' run.log
+          grep -q '"ir_wcet_mismatch"' run.log
+      - name: Replay the native_sim log against the plans (device trace is evidence)
+        working-directory: ws/planos-z
+        run: |
+          M=examples/missions
+          planoszc replay ../run.log --extract --tolerance-ms 50 \
+            --plan $M/01_parallel_sense_accept.yaml --plan $M/02_deadline_reject.yaml \
+            --plan $M/03_resource_conflict_reject.yaml --plan $M/04_parallel_overlap_accept.yaml \
+            --require-overlap demo.parallel_overlap=2
+      - name: Build native_sim shell (stdin/stdout) for the UART upload test
+        working-directory: ws
+        env:
+          ZEPHYR_TOOLCHAIN_VARIANT: host
+        run: west build -b native_sim/native/64 -d build/shell planos-z/apps/planosz_node -- -DEXTRA_CONF_FILE=shell_stdio.conf
+      - name: UART/shell upload - accept, corrupt, forged-WCET and forged-mask plans
+        working-directory: ws/planos-z
+        run: tools/ci/native_sim_shell.sh ../build/shell/zephyr/zephyr.exe

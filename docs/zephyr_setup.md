@@ -63,13 +63,15 @@ west planosz admit planos-z/examples/missions/02_deadline_reject.yaml    # exten
 
 | Goal | Command (from `.zephyr-ws`) |
 |---|---|
-| Non-interactive demo (no shell, runs 3 plans, exits) | `west build -b native_sim/native/64 -d ../build/native_sim_demo ../apps/planosz_node -- -DEXTRA_CONF_FILE=demo.conf` |
+| Non-interactive demo (no shell, runs 6 plans, exits) | `west build -b native_sim/native/64 -d ../build/native_sim_demo ../apps/planosz_node -- -DEXTRA_CONF_FILE=demo.conf` |
 | Interactive shell on a PTY | `west build -b native_sim/native/64 -d ../build/native_sim ../apps/planosz_node` → run `build/native_sim/zephyr/zephyr.exe`, attach to the printed `/dev/pts/N` |
 | Interactive shell on stdin/stdout (pipes, CI) | add `-- -DEXTRA_CONF_FILE=shell_stdio.conf` |
 | ESP32 | `west build -b esp32_devkitc/esp32/procpu -d ../build/esp32 ../apps/planosz_node` |
 
-Shell commands: `planosz status | skills | plans | admit <plan> | run <plan>` with plans
-`accept`, `deadline`, `conflict`.
+Shell commands: `planosz status | skills | plans | admit <plan> | run <plan> | load begin|data|end`
+with plans `accept`, `deadline`, `conflict`, `parallel`, `deadline_forged`, `conflict_forged` and the
+ephemeral `uploaded` slot ([docs/uart_upload.md](uart_upload.md)). `sim_exit` quits the native_sim process.
+Scripted end-to-end check: `make native-sim-shell && PATH=$PWD/.venv/bin:$PATH tools/ci/native_sim_shell.sh`.
 
 ## Notes and gotchas seen while bringing this up
 

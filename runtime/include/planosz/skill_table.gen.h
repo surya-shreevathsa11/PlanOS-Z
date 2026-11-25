@@ -24,6 +24,10 @@ enum planosz_skill_idx {
 #define PLANOSZ_PERM_POWER_CONTROL (1u << 3)
 #define PLANOSZ_PERM_READ_SENSOR (1u << 4)
 
+/* Device resource space: bit i of an excl/shared mask is planosz_res_names[i] */
+#define PLANOSZ_RES_COUNT 7
+extern const char *const planosz_res_names[PLANOSZ_RES_COUNT];
+
 extern const struct planosz_skill_contract planosz_skill_table[PLANOSZ_SKILL_COUNT];
 
 #endif /* PLANOSZ_SKILL_TABLE_GEN_H_ */
