@@ -11,6 +11,7 @@ EXE="${1:-$ROOT/build/native_sim_shell/zephyr/zephyr.exe}"
 PLANOSZC="${PLANOSZC:-planoszc}"
 M="$ROOT/examples/missions"
 OUT="${OUT_DIR:-$(mktemp -d)}"
+mkdir -p "$OUT"
 LOG="$OUT/console.log"
 DELAY="${LINE_DELAY:-0.15}"
 
@@ -25,8 +26,10 @@ l = lines[i]
 pos = len("planosz load data ") + 12
 lines[i] = l[:pos] + ("B" if l[pos] != "B" else "C") + l[pos + 1:]   # flip one payload char
 print("\n".join(lines))' > "$OUT/corrupt.txt"
+# Wire IR carries args/deps/deadline, not resource masks — the device re-derives masks.
+# understate-wcet forges the host WCET field; strip-masks only matters for C-header IR tests.
 "$PLANOSZC" compile "$M/02_deadline_reject.yaml" --emit uart --force --forge understate-wcet > "$OUT/forged_deadline.txt"
-"$PLANOSZC" compile "$M/03_resource_conflict_reject.yaml" --emit uart --force --forge understate-wcet,strip-masks > "$OUT/forged_conflict.txt"
+"$PLANOSZC" compile "$M/03_resource_conflict_reject.yaml" --emit uart --force --forge understate-wcet > "$OUT/forged_conflict.txt"
 
 feed() { while IFS= read -r l; do echo "$l"; sleep "$DELAY"; done < "$1"; }
 
@@ -68,7 +71,7 @@ for line in open(sys.argv[1]):
         sys.exit("a plan was admitted/run after a rejected upload")
 PY
 
-"$PLANOSZC" replay "$LOG" --extract --tolerance-ms 50 \
+"$PLANOSZC" replay "$LOG" --extract --tolerance-ms 5 \
 	--plan "$M/02_deadline_reject.yaml" --plan "$M/03_resource_conflict_reject.yaml" \
 	--plan "$M/04_parallel_overlap_accept.yaml" --require-overlap demo.parallel_overlap=2
 echo "native_sim shell upload check: PASS ($OUT)"

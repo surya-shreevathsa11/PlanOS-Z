@@ -82,7 +82,7 @@ jobs:
         working-directory: ws/planos-z
         run: |
           M=examples/missions
-          planoszc replay ../run.log --extract --tolerance-ms 50 \
+          planoszc replay ../run.log --extract --tolerance-ms 5 \
             --plan $M/01_parallel_sense_accept.yaml --plan $M/02_deadline_reject.yaml \
             --plan $M/03_resource_conflict_reject.yaml --plan $M/04_parallel_overlap_accept.yaml \
             --require-overlap demo.parallel_overlap=2
@@ -91,6 +91,6 @@ jobs:
         env:
           ZEPHYR_TOOLCHAIN_VARIANT: host
         run: west build -b native_sim/native/64 -d build/shell planos-z/apps/planosz_node -- -DEXTRA_CONF_FILE=shell_stdio.conf
-      - name: UART/shell upload - accept, corrupt, forged-WCET and forged-mask plans
+      - name: UART/shell upload - accept, corrupt CRC, forged-WCET plans (device re-derives masks)
         working-directory: ws/planos-z
         run: tools/ci/native_sim_shell.sh ../build/shell/zephyr/zephyr.exe
