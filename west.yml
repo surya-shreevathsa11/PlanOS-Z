@@ -1,0 +1,31 @@
+# PlanOS-Z west manifest (Zephyr "T2" topology: this repo is the manifest repository).
+#
+#   mkdir planosz-ws && cd planosz-ws
+#   git clone https://github.com/<you>/planos-z.git planos-z
+#   west init -l planos-z
+#   west update --narrow -o=--depth=1
+#   west build -b native_sim/native/64 planos-z/apps/planosz_node
+#
+# Only the Zephyr modules this project needs are fetched (keeps the clone small).
+# For a workspace that lives *inside* this repo, use tools/zephyr_setup.sh instead.
+manifest:
+  version: "1.0"
+
+  remotes:
+    - name: zephyrproject-rtos
+      url-base: https://github.com/zephyrproject-rtos
+
+  projects:
+    - name: zephyr
+      remote: zephyrproject-rtos
+      revision: v4.5.0
+      import:
+        name-allowlist:
+          - cmsis
+          - cmsis_6
+          - picolibc
+          - hal_espressif
+
+  self:
+    path: planos-z
+    west-commands: tools/west_commands/west-commands.yml

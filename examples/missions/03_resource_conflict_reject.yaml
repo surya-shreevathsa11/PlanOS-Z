@@ -1,0 +1,19 @@
+# REJECT_RESOURCE_CONFLICT: lamp_a and lamp_b both need the exclusive output
+# `out_warn_lamp` and nothing orders them, so they could run at the same time.
+# Fix: give lamp_b `needs: [lamp_a]` and the same job is ACCEPTED.
+plan_id: demo.resource_conflict
+description: Two unordered pulses on the same lamp channel.
+deadline_ms: 3000
+permissions: [READ_SENSOR, ACTUATE]
+steps:
+  - id: volt
+    action: sensor.read
+    args: { sensor: pack_voltage }
+  - id: lamp_a
+    action: actuator.pulse
+    args: { channel: warn_lamp, count: 3 }
+    needs: [volt]
+  - id: lamp_b
+    action: actuator.pulse
+    args: { channel: warn_lamp, count: 2 }
+    needs: [volt]

@@ -1,0 +1,13 @@
+skill_id: wait
+version: 1
+summary: Delay for a fixed duration (cooperative sleep, no resources held).
+args:
+  duration_ms: { type: uint32, min: 1, max: 60000 }
+returns:
+  waited_ms: { type: uint32 }
+resources: []
+wcet_ms: "duration_ms + 5"
+typical_ms: "duration_ms"
+power_class: SLEEP
+safety_class: SAFE
+permissions: []

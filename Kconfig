@@ -1,0 +1,31 @@
+# PlanOS-Z runtime options
+
+menuconfig PLANOSZ
+	bool "PlanOS-Z job-pack runtime"
+	help
+	  Contract-driven job-pack runtime: skill registry, admission control,
+	  executor and NDJSON tracing.
+
+if PLANOSZ
+
+choice PLANOSZ_BACKEND
+	prompt "PlanOS-Z hardware backend"
+	default PLANOSZ_BACKEND_ESP32 if SOC_FAMILY_ESPRESSIF_ESP32
+	default PLANOSZ_BACKEND_NATIVE_SIM
+
+config PLANOSZ_BACKEND_NATIVE_SIM
+	bool "native_sim (simulated sensors, no hardware)"
+
+config PLANOSZ_BACKEND_ESP32
+	bool "ESP32 (GPIO outputs via devicetree, sensors simulated until wired)"
+	depends on SOC_FAMILY_ESPRESSIF_ESP32
+	select GPIO
+
+endchoice
+
+config PLANOSZ_SHELL
+	bool "'planosz' shell commands (plans, admit, run, skills)"
+	default y
+	depends on SHELL
+
+endif # PLANOSZ

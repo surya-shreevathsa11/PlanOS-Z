@@ -1,0 +1,601 @@
+================================================================================
+PlanOS-Z — MASTER PROJECT SPECIFICATION
+================================================================================
+Status      : LOCKED NAME + DIRECTION (do not shrink into a blink/JSON toy)
+Owner      : Surya Shreevathsa K. S
+Repo name  : PlanOS-Z  (suggested GitHub: planos-z)
+Tagline    : Contract-driven real-time orchestration runtime for Zephyr RTOS
+Hardware   : SOFTWARE-FIRST (native_sim / QEMU). ESP32 backend LATER.
+AI use     : Build the entire system with AI assistance. Product itself does
+             NOT require cloud API keys. Optional local planner later only.
+Created    : 2026-03-25
+Doc type   : Carry this file into your personal project folder and continue.
+================================================================================
+
+--------------------------------------------------------------------------------
+0. ONE-SENTENCE PITCH (memorize this for interviews / README)
+--------------------------------------------------------------------------------
+PlanOS-Z is a capability- and contract-based job orchestration runtime on
+Zephyr: plans are compiled, admitted or rejected against time/resource/power
+constraints, executed with isolation and tracing, and fully validated on
+native_sim before any board is involved.
+
+Resume bullet (draft):
+  "Built PlanOS-Z — a Zephyr RTOS orchestration runtime with skill contracts,
+   admission control, DAG scheduling, deterministic trace/replay, and CI on
+   native_sim; ESP32 hardware backend planned as a drop-in board port."
+
+--------------------------------------------------------------------------------
+1. WHY THIS EXISTS (PROBLEM STATEMENT)
+--------------------------------------------------------------------------------
+Embedded devices today usually get logic in one of three weak ways:
+
+  A) Hardcoded firmware loops (inflexible; every feature = reflash).
+  B) Ad-hoc shell/MQTT commands (no timing guarantees; unsafe composition).
+  C) "AI controls GPIO" demos (impressive demo, zero systems credibility).
+
+Industry systems (vehicles, industrial controllers, robots) need something
+closer to:
+
+  - declared capabilities
+  - validated jobs/plans
+  - resource conflict detection
+  - deadlines / worst-case awareness
+  - observability and replay when something fails
+  - a path from simulation -> hardware without rewriting the core
+
+PlanOS-Z exists to bring that *execution-plane* discipline to Zephyr as a
+coherent open project — not as another sample app.
+
+This is intentionally aligned with your background (vehicle ECU, modular C++,
+NDJSON telemetry, ESP32, host serial agents). PlanOS-Z should feel like the
+*next abstraction layer* above "I wrote firmware that toggles pins."
+
+--------------------------------------------------------------------------------
+2. NON-NEGOTIABLE CALIBER BAR (READ WHEN TEMPTED TO SIMPLIFY)
+--------------------------------------------------------------------------------
+If a stranger opens the GitHub repo and can honestly say any of these, you
+FAILED the bar and must deepen before calling it 1.0:
+
+  [FAIL] "It's just JSON over UART to blink an LED."
+  [FAIL] "It's a Zephyr hello-world with extra folders."
+  [FAIL] "No tests, no CI, only works if you own their exact board."
+  [FAIL] "No reject path — everything always runs."
+  [FAIL] "No architecture doc — can't tell what problem it solves."
+
+1.0 MUST make a stranger say something like:
+
+  [PASS] "This is a small middleware / runtime, not a demo sketch."
+  [PASS] "They thought about admission, resources, and failures."
+  [PASS] "I can clone and run tests on native_sim with no hardware."
+  [PASS] "Adding a skill is a defined contract + codegen path."
+  [PASS] "Traces and replay make behavior debuggable."
+
+HARD RULE: Do not ship a "MVP that is only LED blink" as the public face.
+A blink skill may exist as a *fixture*, but the *product* is the runtime.
+
+--------------------------------------------------------------------------------
+3. WHAT PlanOS-Z IS / IS NOT
+--------------------------------------------------------------------------------
+IS:
+  - A Zephyr-native orchestration runtime (subsystem + app + tooling)
+  - Contract-driven skills with explicit resource/time/power claims
+  - Host-side plan compiler + static checker
+  - On-device admission controller + executor + tracer
+  - Software-first with native_sim as first-class target
+  - Designed so ESP32 is a backend, not the identity of the project
+
+IS NOT:
+  - An LLM chatbot project (optional later, never the core)
+  - A Zephyr tutorial dump
+  - A single-purpose IoT gadget (weather station, plant watering, etc.)
+  - Cloud-dependent
+  - "AI agent framework" marketing fluff
+
+--------------------------------------------------------------------------------
+4. CORE CONCEPTS (MENTAL MODEL)
+--------------------------------------------------------------------------------
+  SKILL
+    A named, versioned capability implemented in C on Zephyr.
+    Example IDs: sensor.read, led.blink, wait, power.sleep, gpio.write
+
+  CONTRACT
+    Metadata every skill must publish before it can be registered:
+      - skill_id + version
+      - argument schema (types, ranges, enums)
+      - output schema
+      - declared resources (e.g. i2c0, gpio2, led0, radio)
+      - WCET estimate (worst-case execution time budget) or duration model
+      - power class (ACTIVE_HIGH / ACTIVE_LOW / SLEEP)
+      - permissions / safety class (SAFE / HAZARDOUS / REQUIRES_CONFIRM)
+
+  PLAN
+    A job submitted to the device: a DAG of steps (not only a linear list),
+    optional conditions, global deadline, required permissions.
+
+  IR / BYTECODE
+    Host compiles Plan -> compact IR (CBOR or custom bytecode). Device does
+    not trust free-form English or unchecked JSON forever; v1 may accept
+    validated JSON, but architecture targets compiled IR.
+
+  ADMISSION
+    Before any side effect: runtime checks that the plan is known, args are
+    valid, resources don't conflict illegally, and deadline vs WCET is
+    plausible. Returns ACCEPT or REJECT with a reason code.
+
+  EXECUTION
+    Scheduler runs ready steps, respects dependencies, locks resources,
+    enforces timeouts, emits trace events, returns structured results.
+
+  TRACE / REPLAY
+    Every admit/reject/start/end/error is logged. native_sim can replay a
+    trace or re-run a plan deterministically for CI and debugging.
+
+  BACKEND
+    Platform binding: native_sim fakes first; ESP32 real GPIO/sensors later.
+    Core runtime must not #ifdef itself into unreadability per board.
+
+--------------------------------------------------------------------------------
+5. FLAGSHIP EXAMPLE (USE IN README + DEMOS)
+--------------------------------------------------------------------------------
+Goal submitted to PlanOS-Z:
+
+  "Read temperature and humidity in parallel.
+   If temperature > 30 C, blink warning LED 5 times.
+   Else enter light sleep for 10 seconds.
+   Entire job must finish within 2000 ms or abort.
+   Requires resources: i2c0, led0."
+
+Expected serious behaviors:
+
+  CASE A — admission reject (shows depth):
+    REJECTED  PLAN_DEADLINE_INFEASIBLE
+    detail: estimated_wcet_ms=2400 deadline_ms=2000
+
+  CASE B — resource conflict reject:
+    REJECTED  RESOURCE_CONFLICT
+    detail: steps A and B both need exclusive i2c0 without share mode
+
+  CASE C — accept + run:
+    ACCEPTED
+    TRACE:
+      admit ok
+      fork A sensor.read(temp) / B sensor.read(humidity)
+      join
+      cond temp=31.2 -> led.blink(times=5)
+      done total=1180ms
+    RESULT: ok
+
+This example is the north star. If your demo cannot show REJECT for a good
+reason, the project is still too shallow.
+
+--------------------------------------------------------------------------------
+6. SYSTEM ARCHITECTURE
+--------------------------------------------------------------------------------
+
+  +------------------+       +------------------------+
+  | Plan authoring   |       | Skill IDL (YAML/JSON)  |
+  | (YAML/JSON plan) |       | contracts per skill    |
+  +--------+---------+       +-----------+------------+
+           |                             |
+           v                             v
+  +------------------+       +------------------------+
+  | planoszc         |<------| codegen                |
+  | plan compiler +  |       | C stubs, schemas, docs |
+  | static checker   |       +------------------------+
+  +--------+---------+
+           |  IR / validated plan blob
+           v
+  +------------------------------------------------------+
+  |                 PlanOS-Z Runtime (Zephyr)            |
+  |  +-------------+  +--------------+  +-------------+  |
+  |  | Ingress     |  | Admission    |  | Scheduler/  |  |
+  |  | (shell/UART |  | Controller   |  | Executor    |  |
+  |  |  / later    |  |              |  | (DAG)       |  |
+  |  |  net)       |  +--------------+  +-------------+  |
+  |  +------+------+         |                 |         |
+  |         |                v                 v         |
+  |         |         +--------------+  +-------------+  |
+  |         |         | Resource     |  | Skill       |  |
+  |         |         | Manager      |  | Registry    |  |
+  |         |         +--------------+  +-------------+  |
+  |         |                                  |         |
+  |         v                                  v         |
+  |  +--------------+              +------------------+  |
+  |  | Trace / Log  |              | Backend HAL      |  |
+  |  | + Replay     |              | native_sim|ESP32 |  |
+  |  +--------------+              +------------------+  |
+  +------------------------------------------------------+
+
+Design rules:
+  - Runtime core has ZERO dependency on a specific sensor breakout.
+  - Backends implement a narrow HAL (led, delay, sensor fake/real, etc.).
+  - Skills call HAL + Zephyr primitives; they do not own the scheduler.
+  - Prefer zbus or message queues between ingress, admission, executor.
+  - Deterministic behavior on native_sim is a first-class requirement.
+
+--------------------------------------------------------------------------------
+7. REPOSITORY LAYOUT (TARGET)
+--------------------------------------------------------------------------------
+planos-z/
+  README.md                 <- problem, architecture, quickstart native_sim
+  ARCHITECTURE.md           <- deep design (can start from this .txt)
+  ROADMAP.md
+  LICENSE                   <- Apache-2.0 recommended (Zephyr-friendly)
+  west.yml                  <- Zephyr workspace integration
+  docs/
+    skill_idl.md
+    plan_language.md
+    error_codes.md
+    esp32_port.md           <- written before hardware work begins
+  idl/
+    skills/
+      sensor.read.yaml
+      led.blink.yaml
+      led.set.yaml
+      wait.yaml
+      power.sleep.yaml
+      sys.info.yaml
+      gpio.write.yaml
+    schemas/
+      plan.schema.json
+      contract.schema.json
+  tools/
+    planoszc/               <- plan compiler + static checker (Python first)
+    codegen/                <- IDL -> C headers/tables
+    west_commands/          <- west planosz ... extensions
+  runtime/
+    include/planosz/
+    src/
+      ingress/
+      admission/
+      scheduler/
+      resource/
+      registry/
+      trace/
+      ir/
+    tests/                  <- Zephyr twister / unit tests on native_sim
+  backends/
+    native_sim/
+    esp32/                  <- stub until hardware phase
+  skills/
+    src/                    <- skill implementations
+  apps/
+    planosz_node/           <- main Zephyr app image
+  ci/
+    workflows/              <- build + twister + planoszc selftests
+  examples/
+    plans/
+      parallel_sense_blink.yaml
+      deadline_reject.yaml
+      resource_conflict.yaml
+  traces/                   <- golden traces for replay tests
+
+--------------------------------------------------------------------------------
+8. SKILL IDL (CONTRACT) — REQUIRED FIELDS
+--------------------------------------------------------------------------------
+Example: idl/skills/led.blink.yaml
+
+  skill_id: led.blink
+  version: 1
+  summary: Blink an LED N times with on/off durations.
+  args:
+    times:   { type: uint16, min: 1, max: 50 }
+    on_ms:   { type: uint32, min: 1, max: 5000, default: 200 }
+    off_ms:  { type: uint32, min: 1, max: 5000, default: 200 }
+  returns:
+    blinked: { type: uint16 }
+  resources:
+    - { name: led0, mode: exclusive }
+  wcet_ms: "times * (on_ms + off_ms) + 20"
+  power_class: ACTIVE_LOW
+  safety_class: SAFE
+  permissions: [ACTUATE_LED]
+
+Codegen must emit:
+  - arg validators
+  - registry table entries
+  - documentation fragments
+  - host-side schema used by planoszc
+
+Adding a skill in a "great" project means:
+  1) write IDL
+  2) run codegen
+  3) implement skill handler
+  4) add unit/plan tests
+  5) docs update automatically or via checklist
+NOT: paste a random function into main.c
+
+--------------------------------------------------------------------------------
+9. PLAN LANGUAGE (v1)
+--------------------------------------------------------------------------------
+Support YAML/JSON plans with:
+
+  - metadata: plan_id, deadline_ms, permissions[]
+  - steps[] each with: id, action, args, needs[] (dependencies)
+  - optional: parallel groups via independent deps (DAG)
+  - optional: conditional edges (v1.1 if needed; can be host-lowered)
+
+Example:
+
+  plan_id: demo.parallel_sense
+  deadline_ms: 2000
+  permissions: [READ_SENSOR, ACTUATE_LED]
+  steps:
+    - id: t
+      action: sensor.read
+      args: { sensor: temp }
+    - id: h
+      action: sensor.read
+      args: { sensor: humidity }
+    - id: warn
+      action: led.blink
+      args: { times: 5 }
+      needs: [t, h]
+      # condition handling strategy documented in plan_language.md
+
+v1 execution may linearize safely if DAG scheduler is phased — BUT the IR
+and admission must still reason about declared deps and resources.
+Do not fake "architecture" that the code cannot support; phase features
+honestly (see section 12).
+
+--------------------------------------------------------------------------------
+10. ERROR / RESULT MODEL (PUBLIC API SURFACE)
+--------------------------------------------------------------------------------
+Stable reason codes (extend carefully; document all):
+
+  OK
+  REJECT_UNKNOWN_SKILL
+  REJECT_BAD_ARGS
+  REJECT_PERMISSION
+  REJECT_RESOURCE_CONFLICT
+  REJECT_DEADLINE_INFEASIBLE
+  REJECT_UNSUPPORTED_IR
+  REJECT_SAFETY_CLASS
+  EXEC_TIMEOUT
+  EXEC_SKILL_FAIL
+  EXEC_CANCELLED
+  EXEC_BACKEND_UNAVAILABLE
+
+Every reject/fail must be machine-readable AND human-readable.
+Prefer NDJSON telemetry lines (fits your existing style) e.g.:
+
+  {"type":"admit","plan":"demo.parallel_sense","status":"REJECT",
+   "code":"REJECT_DEADLINE_INFEASIBLE","wcet_ms":2400,"deadline_ms":2000}
+
+--------------------------------------------------------------------------------
+11. RUNTIME INTERNALS (WHAT "GREAT" LOOKS LIKE IN CODE)
+--------------------------------------------------------------------------------
+Admission controller:
+  - schema validate
+  - permission check
+  - build resource timeline / conflict graph from step deps
+  - estimate WCET from contracts (conservative)
+  - compare to deadline_ms
+  - emit admit trace
+
+Resource manager:
+  - named resources with exclusive/shared modes
+  - lock acquire with timeout
+  - deadlock avoidance via lock ordering OR reject-on-cycle at admission
+
+Scheduler / executor:
+  - ready queue from satisfied dependencies
+  - per-step timeout from contract
+  - cancellation path
+  - no blocking forever without watchdog/timeout policy
+
+Trace:
+  - ring buffer on device
+  - export over UART
+  - golden file compare in CI
+  - replay harness on native_sim
+
+Registry:
+  - static registration table (v1)
+  - version field on skills
+  - query command: list skills + contracts summary
+
+--------------------------------------------------------------------------------
+12. PHASED DELIVERY (DO NOT SKIP TO HARDWARE)
+--------------------------------------------------------------------------------
+PHASE 0 — SPEC FREEZE (this document + ARCHITECTURE.md)
+  Deliverables:
+    - this master spec copied into repo as docs/MASTER_SPEC.txt
+    - ARCHITECTURE.md, error_codes.md outlines
+    - public 1.0 definition (section 13)
+  Exit: you can explain PlanOS-Z in 60 seconds without saying "LED demo"
+
+PHASE 1 — SKELETON + native_sim BRING-UP
+  Deliverables:
+    - west workspace builds apps/planosz_node for native_sim
+    - logging + shell command stub: planosz status
+    - CI workflow: build native_sim
+  Exit: clone -> west update -> west build works on CI
+
+PHASE 2 — IDL + CODEGEN + REGISTRY
+  Deliverables:
+    - contract schema
+    - 5+ skill IDL files
+    - codegen produces registry tables
+    - sys.info + wait + led.set (fake backend) implemented
+  Exit: shell can list skills from generated table
+
+PHASE 3 — VALIDATED LINEAR EXECUTOR
+  Deliverables:
+    - ingress accepts a plan blob (shell/UART)
+    - arg validation
+    - linear execute + NDJSON events
+    - examples/plans happy path
+  Exit: deterministic success on native_sim
+
+PHASE 4 — ADMISSION CONTROL (THIS IS THE SOUL OF THE PROJECT)
+  Deliverables:
+    - resource conflict detection
+    - deadline vs WCET reject
+    - permission rejects
+    - example plans that *must* reject
+    - tests asserting reject codes
+  Exit: README demo shows ACCEPT and REJECT
+
+PHASE 5 — DAG / PARALLEL SCHEDULING
+  Deliverables:
+    - dependency-aware scheduler
+    - parallel fake sensor reads
+    - resource exclusive behavior under concurrency
+  Exit: parallel_sense example works; conflict example rejects
+
+PHASE 6 — TRACE + REPLAY + FAULT INJECTION
+  Deliverables:
+    - trace export
+    - replay test
+    - backend fault: sensor.fail
+    - CI golden traces
+  Exit: "debug without hardware" story is real
+
+PHASE 7 — TOOLING POLISH
+  Deliverables:
+    - planoszc check/compile CLI
+    - west planosz skill new
+    - docs for adding a skill in <15 minutes
+  Exit: contributor path exists (even if only you use it)
+
+PHASE 8 — ESP32 BACKEND (HARDWARE LATER)
+  Deliverables:
+    - backends/esp32 LED + delay + optional sensor
+    - board overlay + flash instructions
+    - same plans run on device
+  Exit: hardware is a port, not a rewrite
+
+PHASE 9 (OPTIONAL STRETCH — ONLY AFTER 1.0)
+  - CBOR IR fully replacing JSON on-wire
+  - power budget accounting
+  - multi-plan queue with priorities
+  - local Ollama planner plugin (still no cloud key)
+  - signed skill packs
+  - multi-node sim
+
+--------------------------------------------------------------------------------
+13. DEFINITION OF 1.0 (SHIP GATE)
+--------------------------------------------------------------------------------
+PlanOS-Z 1.0 is READY to put on a resume / GitHub when ALL are true:
+
+  [ ] native_sim app builds in CI on every commit
+  [ ] At least 6 skills with real IDL contracts + codegen
+  [ ] Admission can reject: bad args, unknown skill, resource conflict,
+      infeasible deadline
+  [ ] Executor supports dependent steps (DAG or honest documented subset
+      with working parallel example)
+  [ ] NDJSON (or equivalent) trace stream for admit/exec/complete
+  [ ] At least 10 automated tests (unit + plan tests) passing on native_sim
+  [ ] README explains PROBLEM -> ARCHITECTURE -> QUICKSTART -> DEMO
+  [ ] ARCHITECTURE.md is accurate to the code
+  [ ] examples/ includes accept + reject plans
+  [ ] "Add a skill" doc exists and matches the repo
+  [ ] No cloud API key required for core demo
+  [ ] ESP32 may be incomplete, but backends/esp32 stub + port doc exist
+
+If you only have linear JSON->fake LED with no admission rejects, you are
+still in Phase 3 — do not market it as PlanOS-Z 1.0.
+
+--------------------------------------------------------------------------------
+14. WHAT YOU NEED (SOFTWARE-FIRST)
+--------------------------------------------------------------------------------
+Required now:
+  - Linux or WSL2
+  - Git + GitHub
+  - Python 3.10+
+  - Zephyr SDK + west
+  - C knowledge (you already have stronger embedded chops than this needs)
+  - This spec
+
+Not required for 1.0:
+  - ESP32 board (phase 8)
+  - Sensors / LEDs
+  - Cloud LLM API key
+  - Mobile app / fancy UI
+  - Kubernetes / AWS / etc.
+
+Optional later:
+  - ESP32 + USB cable
+  - DHT/BME sensor
+  - Ollama for natural-language -> plan on host
+
+--------------------------------------------------------------------------------
+15. UNIQUENESS POSITIONING (FOR README "WHY NOT X")
+--------------------------------------------------------------------------------
+Compared to common GitHub Zephyr repos:
+  - Not an intro-to-Zephyr course dump
+  - Not TinyML gesture classification
+  - Not artificial-nose / vibration-anomaly clones
+  - Not ESP-IDF Arduino-style app with Zephyr stickers
+
+Closest intellectual neighbors (be honest in docs):
+  - robotics behavior trees / executive layers
+  - autosar-like runnable scheduling ideas (inspired by, not copying)
+  - capability systems / admission control in RTOS research
+
+PlanOS-Z difference:
+  practical Zephyr implementation + IDL/codegen + sim-first CI + explicit
+  rejectable contracts, packaged as a portfolio-grade open system.
+
+Before first public push: quickly search GitHub for overlapping names/readme
+claims; adjust positioning if a near-identical "Zephyr plan runtime" exists.
+Uniqueness is in depth of admission/trace/tooling, not the word "plan".
+
+--------------------------------------------------------------------------------
+16. INTERVIEW STORY (PRACTICE)
+--------------------------------------------------------------------------------
+60-second version:
+  "Hardcoded firmware and raw command APIs don't compose safely under time
+   and resource constraints. PlanOS-Z is a Zephyr runtime where skills publish
+   contracts — arguments, resources, WCET, permissions — and jobs are admitted
+   or rejected before side effects. I built it software-first on native_sim
+   with codegen from an IDL, DAG-aware execution, and trace/replay in CI.
+   ESP32 is a later hardware backend, not the core."
+
+Deep-dive topics you should be able to defend:
+  - how WCET is estimated from contracts (and limits of that estimate)
+  - how resource conflicts are detected
+  - why admission happens before execution
+  - how native_sim tests replace early hardware dependency
+  - how you'd extend this to a vehicle ECU job runner
+
+--------------------------------------------------------------------------------
+17. WORKING RULES WHILE BUILDING WITH AI
+--------------------------------------------------------------------------------
+  1. Never let the agent "simplify away" admission, contracts, or tests.
+  2. Every phase ends with something runnable on native_sim.
+  3. Prefer small vertical slices that preserve architecture names.
+  4. Keep error codes stable; don't rename casually.
+  5. Update ARCHITECTURE.md when code diverges — docs debt = resume debt.
+  6. Hardware envy is a trap until Phase 8 exit criteria are earned.
+  7. If a change only helps a demo GIF but weakens the runtime story, reject it.
+
+--------------------------------------------------------------------------------
+18. IMMEDIATE NEXT ACTIONS (WHEN YOU OPEN PERSONAL PROJECT FOLDER)
+--------------------------------------------------------------------------------
+  1. Copy this file to the new repo as docs/MASTER_SPEC.txt
+  2. Create GitHub repo: PlanOS-Z (or planos-z)
+  3. Write README.md skeleton from sections 0, 1, 5, 13
+  4. Initialize Zephyr workspace west.yml + empty apps/planosz_node
+  5. Start PHASE 1 bring-up on native_sim
+  6. Do NOT buy/parts-chase hardware until Phase 7 is largely done
+
+--------------------------------------------------------------------------------
+19. NAME LOCK
+--------------------------------------------------------------------------------
+Official name     : PlanOS-Z
+Pronunciation     : "Plan OS Zee"
+Runtime C prefix  : planosz_ / PLANOSZ_
+CLI name          : planoszc
+West extension    : west planosz ...
+Shell command     : planosz ...
+
+Do not rename casually after repo creation. Consistency matters for search
+and resume recognition.
+
+================================================================================
+END OF MASTER SPEC — PlanOS-Z
+Build a runtime, not a toy.
+================================================================================

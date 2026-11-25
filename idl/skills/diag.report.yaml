@@ -1,0 +1,14 @@
+skill_id: diag.report
+version: 1
+summary: Emit a diagnostic summary record to the trace sink (single writer).
+args:
+  scope: { type: enum, values: [summary, full], default: summary }
+returns:
+  records: { type: uint16 }
+resources:
+  - { name: trace_sink, mode: exclusive }
+wcet_ms: "30 if scope == 'summary' else 120"
+typical_ms: "10 if scope == 'summary' else 60"
+power_class: ACTIVE_LOW
+safety_class: SAFE
+permissions: [DIAG]

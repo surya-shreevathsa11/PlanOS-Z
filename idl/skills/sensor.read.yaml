@@ -1,0 +1,17 @@
+skill_id: sensor.read
+version: 1
+summary: Sample a (simulated vehicle-style) analog channel and return a scaled value.
+args:
+  sensor:  { type: enum, values: [pack_voltage, coolant_proxy, cell_temp, ambient_temp] }
+  samples: { type: uint8, min: 1, max: 16, default: 1 }
+returns:
+  value: { type: float }
+  unit:  { type: enum, values: [V, degC] }
+resources:
+  - { name: adc0, mode: shared }
+  - { name: power_domain, mode: shared }
+wcet_ms: "40 + 20 * samples"
+typical_ms: "10 + 5 * samples"
+power_class: ACTIVE_LOW
+safety_class: SAFE
+permissions: [READ_SENSOR]

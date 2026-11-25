@@ -1,0 +1,12 @@
+{"seq":0,"type":"admit","t_ms":0,"plan":"demo.parallel_sense","status":"ACCEPT","code":"OK","wcet_ms":1180,"deadline_ms":2000,"steps":5}
+{"seq":1,"type":"run_start","t_ms":0,"plan":"demo.parallel_sense","deadline_ms":2000,"steps":5}
+{"seq":2,"type":"step_start","t_ms":0,"step":"volt","action":"sensor.read","args":{"sensor":"pack_voltage","samples":1}}
+{"seq":3,"type":"step_start","t_ms":0,"step":"cool","action":"sensor.read","args":{"sensor":"coolant_proxy","samples":4}}
+{"seq":4,"type":"step_end","t_ms":15,"step":"volt","status":"OK","dur_ms":15,"out":{"value":48.2,"unit":"V"}}
+{"seq":5,"type":"step_end","t_ms":30,"step":"cool","status":"OK","dur_ms":30,"out":{"value":31.2,"unit":"degC"}}
+{"seq":6,"type":"step_start","t_ms":30,"step":"warn","action":"actuator.pulse","args":{"channel":"warn_lamp","count":5,"on_ms":100,"off_ms":100}}
+{"seq":7,"type":"step_skip","t_ms":30,"step":"rest","cond":"cool.value <= 30","observed":31.2}
+{"seq":8,"type":"step_end","t_ms":1030,"step":"warn","status":"OK","dur_ms":1000,"out":{"pulses":5}}
+{"seq":9,"type":"step_start","t_ms":1030,"step":"report","action":"diag.report","args":{"scope":"summary"}}
+{"seq":10,"type":"step_end","t_ms":1040,"step":"report","status":"OK","dur_ms":10,"out":{"records":1}}
+{"seq":11,"type":"run_end","t_ms":1040,"plan":"demo.parallel_sense","status":"OK","code":"OK","total_ms":1040}

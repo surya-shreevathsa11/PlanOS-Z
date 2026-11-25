@@ -1,0 +1,6 @@
+west-commands:
+  - file: tools/west_commands/planosz.py
+    commands:
+      - name: planosz
+        class: PlanOSZ
+        help: PlanOS-Z job-pack tool (check | admit | run | compile | skills | codegen)

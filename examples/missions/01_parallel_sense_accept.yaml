@@ -1,0 +1,29 @@
+# ACCEPT: sense two channels in parallel, branch on the reading, report.
+# Both sensor reads share adc0 (shared claim), so they may overlap.
+# `warn` and `rest` are mutually exclusive branches of the same condition, so the
+# admission controller knows they can never overlap even though both touch power_domain.
+plan_id: demo.parallel_sense
+description: Read pack voltage and coolant proxy in parallel; warn if hot, else idle; report.
+deadline_ms: 2000
+permissions: [READ_SENSOR, ACTUATE, POWER_CONTROL, DIAG]
+steps:
+  - id: volt
+    action: sensor.read
+    args: { sensor: pack_voltage }
+  - id: cool
+    action: sensor.read
+    args: { sensor: coolant_proxy, samples: 4 }
+  - id: warn
+    action: actuator.pulse
+    args: { channel: warn_lamp, count: 5, on_ms: 100, off_ms: 100 }
+    needs: [volt, cool]
+    when: { ref: cool.value, op: ">", value: 30 }
+  - id: rest
+    action: power.idle
+    args: { duration_ms: 300, mode: light }
+    needs: [volt, cool]
+    when: { ref: cool.value, op: "<=", value: 30 }
+  - id: report
+    action: diag.report
+    args: { scope: summary }
+    needs: [warn, rest]

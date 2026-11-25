@@ -1,0 +1,7 @@
+# Makes this repository a Zephyr module: Kconfig symbols (CONFIG_PLANOSZ*) and the
+# PlanOS-Z runtime library become available to any app that lists the repo in
+# ZEPHYR_EXTRA_MODULES (apps/planosz_node does this itself).
+name: planosz
+build:
+  cmake: .
+  kconfig: Kconfig

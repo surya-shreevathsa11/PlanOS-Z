@@ -1,0 +1,39 @@
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# --- Zephyr workspace / SDK / build output (reproduce with tools/zephyr_setup.sh) ---
+.zephyr-ws/
+.zephyr-sdk/
+.zephyr-sdk-dl/
+.west/
+/build*/
+twister-out*/
+zephyr-sdk-*/
+*.elf
+*.exe
+*.hex
+*.bin
+*.map
+compile_commands.json
+
+# --- Local-only (do not push) ---
+docs/INTERVIEW_GUIDE.md
+
+# --- Editors / OS ---
+.cursor/
+.claude/
+.vscode/
+.idea/
+*.swp
+.DS_Store

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "planoszc"
+version = "0.1.0"
+description = "PlanOS-Z host tool: job-pack compiler, static checker, admission gate and fake executor"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = ["PyYAML>=6.0", "jsonschema>=4.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+planoszc = "planoszc.cli:main"
+
+[tool.setuptools]
+packages = ["planoszc"]

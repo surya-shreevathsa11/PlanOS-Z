@@ -1,0 +1,16 @@
+skill_id: actuator.contactor
+version: 1
+summary: Open or close the (simulated) main contactor. HAZARDOUS - rejected unless device policy allows it.
+args:
+  state:     { type: enum, values: [close, open] }
+  settle_ms: { type: uint32, min: 10, max: 2000, default: 200 }
+returns:
+  state: { type: enum, values: [close, open] }
+resources:
+  - { name: contactor0, mode: exclusive }
+  - { name: power_domain, mode: shared }
+wcet_ms: "settle_ms + 50"
+typical_ms: "settle_ms"
+power_class: ACTIVE_HIGH
+safety_class: HAZARDOUS
+permissions: [ACTUATE, HV_CONTROL]

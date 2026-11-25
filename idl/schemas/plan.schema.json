@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://planos-z.dev/schemas/plan.schema.json",
+  "title": "PlanOS-Z mission / job pack",
+  "type": "object",
+  "required": ["plan_id", "deadline_ms", "permissions", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "plan_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+    "description": { "type": "string" },
+    "deadline_ms": { "type": "integer", "minimum": 1 },
+    "permissions": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }, "uniqueItems": true },
+    "steps": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/$defs/step" } }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["id", "action"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" },
+        "action": { "type": "string" },
+        "args": { "type": "object" },
+        "needs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "confirm": { "type": "boolean" },
+        "when": {
+          "type": "object",
+          "required": ["ref", "op", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "ref": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*\\.[A-Za-z][A-Za-z0-9_]*$" },
+            "op": { "enum": [">", ">=", "<", "<=", "==", "!="] },
+            "value": { "type": ["number", "string", "boolean"] }
+          }
+        }
+      }
+    }
+  }
+}

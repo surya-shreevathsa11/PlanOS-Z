@@ -1,0 +1,13 @@
+skill_id: sys.info
+version: 1
+summary: Read static or cheap runtime information about the node.
+args:
+  field: { type: enum, values: [uptime, version, board, heap] }
+returns:
+  text: { type: string }
+resources: []
+wcet_ms: "5"
+typical_ms: "1"
+power_class: ACTIVE_LOW
+safety_class: SAFE
+permissions: []

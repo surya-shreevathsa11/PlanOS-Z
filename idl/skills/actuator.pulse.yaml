@@ -1,0 +1,20 @@
+skill_id: actuator.pulse
+version: 1
+summary: Pulse a low-power output channel N times (lamp, fan, buzzer).
+args:
+  channel: { type: enum, values: [warn_lamp, cooling_fan, buzzer] }
+  count:   { type: uint16, min: 1, max: 50 }
+  on_ms:   { type: uint32, min: 1, max: 5000, default: 200 }
+  off_ms:  { type: uint32, min: 1, max: 5000, default: 200 }
+returns:
+  pulses: { type: uint16 }
+resources:
+  # Resource names may reference args: two pulses on DIFFERENT channels never conflict.
+  - { name: "out_{channel}", mode: exclusive }
+  - { name: power_domain, mode: shared }
+# +2 ms per pulse = tick-quantisation margin for the two sleeps (measured on native_sim)
+wcet_ms: "count * (on_ms + off_ms + 2) + 20"
+typical_ms: "count * (on_ms + off_ms)"
+power_class: ACTIVE_LOW
+safety_class: SAFE
+permissions: [ACTUATE]

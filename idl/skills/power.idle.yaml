@@ -1,0 +1,16 @@
+skill_id: power.idle
+version: 1
+summary: Enter an idle / sleep state for a bounded time. Needs the power domain exclusively.
+args:
+  duration_ms: { type: uint32, min: 1, max: 600000 }
+  mode:        { type: enum, values: [light, deep], default: light }
+returns:
+  slept_ms: { type: uint32 }
+resources:
+  # Exclusive: cannot overlap any unordered step that is using the power domain.
+  - { name: power_domain, mode: exclusive }
+wcet_ms: "duration_ms + (40 if mode == 'deep' else 10)"
+typical_ms: "duration_ms + (30 if mode == 'deep' else 5)"
+power_class: SLEEP
+safety_class: SAFE
+permissions: [POWER_CONTROL]

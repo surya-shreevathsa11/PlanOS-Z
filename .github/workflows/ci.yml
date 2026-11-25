@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    name: planoszc + C core (host)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install planoszc
+        run: pip install -e "tools/planoszc[dev]"
+      - name: Host tests (admission, executor, CLI, golden trace, C runtime via gcc)
+        run: python -m pytest tests/host -v
+      - name: Demo - ACCEPT, then REJECTs that must show their reason codes
+        run: |
+          planoszc admit examples/missions/01_parallel_sense_accept.yaml
+          out=$(planoszc admit examples/missions/02_deadline_reject.yaml || true); echo "$out"
+          echo "$out" | grep -q REJECT_DEADLINE_INFEASIBLE
+          out=$(planoszc admit examples/missions/03_resource_conflict_reject.yaml || true); echo "$out"
+          echo "$out" | grep -q REJECT_RESOURCE_CONFLICT
+
+  zephyr-native-sim:
+    name: Zephyr native_sim build + run
+    runs-on: ubuntu-latest
+    steps:
+      # T2 workspace: this repo is the manifest repository (see west.yml)
+      - uses: actions/checkout@v4
+        with:
+          path: ws/planos-z
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: System deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends device-tree-compiler ninja-build cmake gcc
+      - name: west init/update (shallow, only needed modules)
+        working-directory: ws
+        run: |
+          pip install west
+          west init -l planos-z
+          west update --narrow -o=--depth=1
+          pip install -r zephyr/scripts/requirements-base.txt
+      - name: Generated code is fresh
+        working-directory: ws/planos-z
+        run: |
+          make codegen app-plans
+          git diff --exit-code -- runtime apps
+      - name: Build native_sim (demo overlay)
+        working-directory: ws
+        env:
+          ZEPHYR_TOOLCHAIN_VARIANT: host
+        run: west build -b native_sim/native/64 planos-z/apps/planosz_node -- -DEXTRA_CONF_FILE=demo.conf
+      - name: Run and assert admit/reject codes
+        working-directory: ws
+        run: |
+          ./build/zephyr/zephyr.exe < /dev/null | tee run.log
+          grep -q '"status":"ACCEPT"' run.log
+          grep -q 'RESULT: OK' run.log
+          grep -q 'RESULT: REJECT_DEADLINE_INFEASIBLE' run.log
+          grep -q 'RESULT: REJECT_RESOURCE_CONFLICT' run.log

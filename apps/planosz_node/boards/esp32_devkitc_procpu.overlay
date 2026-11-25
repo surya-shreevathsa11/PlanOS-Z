@@ -1,0 +1,27 @@
+/*
+ * PlanOS-Z ESP32 wiring for actuator.pulse channels (adjust pins to your breadboard).
+ * Sensors are simulated in v0.1; only these three outputs are real GPIO.
+ */
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	aliases {
+		warn-lamp = &planosz_warn_lamp;
+		cooling-fan = &planosz_cooling_fan;
+		buzzer = &planosz_buzzer;
+	};
+
+	planosz_outputs {
+		compatible = "gpio-leds";
+
+		planosz_warn_lamp: warn_lamp {
+			gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>; /* on-board LED on most DevKitC clones */
+		};
+		planosz_cooling_fan: cooling_fan {
+			gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
+		};
+		planosz_buzzer: buzzer {
+			gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
+		};
+	};
+};

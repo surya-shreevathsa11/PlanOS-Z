@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://planos-z.dev/schemas/contract.schema.json",
+  "title": "PlanOS-Z skill contract",
+  "type": "object",
+  "required": ["skill_id", "version", "summary", "args", "returns", "resources",
+               "wcet_ms", "power_class", "safety_class", "permissions"],
+  "additionalProperties": false,
+  "properties": {
+    "skill_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$" },
+    "version": { "type": "integer", "minimum": 1 },
+    "summary": { "type": "string", "minLength": 1 },
+    "args": { "type": "object", "additionalProperties": { "$ref": "#/$defs/field" } },
+    "returns": { "type": "object", "additionalProperties": { "$ref": "#/$defs/field" } },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "mode"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "mode": { "enum": ["exclusive", "shared"] }
+        }
+      }
+    },
+    "wcet_ms": { "type": ["string", "integer"], "description": "Arithmetic expression over arg names (milliseconds)." },
+    "typical_ms": { "type": ["string", "integer"], "description": "Optional typical-case duration used by the simulator." },
+    "power_class": { "enum": ["ACTIVE_HIGH", "ACTIVE_LOW", "SLEEP"] },
+    "safety_class": { "enum": ["SAFE", "REQUIRES_CONFIRM", "HAZARDOUS"] },
+    "permissions": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }, "uniqueItems": true }
+  },
+  "$defs": {
+    "field": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["uint8", "uint16", "uint32", "int32", "float", "bool", "enum", "string"] },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "default": {},
+        "values": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      }
+    }
+  }
+}

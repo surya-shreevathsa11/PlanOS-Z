@@ -1,0 +1,11 @@
+mainmenu "PlanOS-Z node"
+
+config APP_AUTODEMO
+	bool "Submit the bundled demo plans at boot"
+	default n
+
+config APP_EXIT_AFTER_DEMO
+	bool "Exit the process after the demo (native_sim only; used by CI)"
+	depends on BOARD_NATIVE_SIM
+
+source "Kconfig.zephyr"
